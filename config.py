@@ -31,6 +31,7 @@ def create_llm(temperature: float = 0.3, model: str | None = None) -> ChatOpenAI
         openai_api_key=API_KEY,
         openai_api_base=API_BASE,
         temperature=temperature,
+        streaming=True,
     )
 
 class AgentDecisoinConfig:
