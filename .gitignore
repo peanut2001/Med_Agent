@@ -31,3 +31,6 @@ data/qdrant_db/
 data/docs_db/
 data/parsed_docs/
 uploads/
+
+# Claude Code / agent workspaces
+.claude/
