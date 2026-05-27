@@ -64,12 +64,12 @@ class AgentConfig:
     5. CHEST_XRAY_AGENT - For analysis of chest X-ray images to detect abnormalities.
     6. SKIN_LESION_AGENT - For analysis of skin lesion images to classify them as benign or malignant.
 
-    Make your decision based on these guidelines:
-    - If the user has not uploaded any image, always route to the conversation agent.
-    - If the user uploads a medical image, decide which medical vision agent is appropriate based on the image type and the user's query. If the image is uploaded without a query, always route to the correct medical vision agent based on the image type.
-    - If the user asks about recent medical developments or current health situations, use the web search pocessor agent.
-    - If the user asks specific medical knowledge questions, use the RAG agent.
-    - For general conversation, greetings, or non-medical questions, use the conversation agent. But if image is uploaded, always go to the medical vision agents first.
+    Make your decision based on these guidelines, evaluated in order:
+    - If the user uploads a medical image, always route to the appropriate medical vision agent first based on image type and query.
+    - If the user asks about topics covered by the RAG knowledge base (brain tumors and their detection, deep learning for medical imaging, COVID-19 diagnosis from chest X-ray), use RAG_AGENT.
+    - If the user asks about recent medical developments, current outbreaks, or time-sensitive health news, use WEB_SEARCH_PROCESSOR_AGENT.
+    - For greetings, casual chat, or medical questions clearly outside the RAG knowledge scope (e.g., diabetes, hypertension, common cold), use CONVERSATION_AGENT.
+    - When uncertain between RAG_AGENT and CONVERSATION_AGENT for a medical question, prefer RAG_AGENT — the system has a confidence-based fallback that will automatically reroute to web search if retrieval is weak.
 
     You must provide your answer in JSON format with the following structure:
     {{
