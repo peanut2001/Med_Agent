@@ -1,0 +1,50 @@
+# Python virtual environments (massive, never needed in image)
+venv/
+.venv/
+env/
+ENV/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+.pytest_cache/
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# Project-specific large dirs (these should be mounted at runtime, not baked in)
+uploads/
+data/docs_db/
+data/parsed_docs/
+
+# Logs
+*.log
+logs/
+
+# Env / secrets (mount at runtime instead)
+.env
+.env.*
+
+# Claude / agent workspaces
+.claude/

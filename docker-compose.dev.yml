@@ -1,0 +1,27 @@
+services:
+  medical-assistant-dev:
+    build: .
+    image: medical-assistant:dev
+    container_name: medical-assistant-dev
+    ports:
+      - "8001:8000"
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+      - WATCHFILES_FORCE_POLLING=true
+    volumes:
+      - .:/app
+      - /app/venv
+      - /app/__pycache__
+      - /app/.git
+    command: >
+      sh -c "pip install -q watchfiles &&
+      exec uvicorn app:app
+      --host 0.0.0.0 --port 8000
+      --reload
+      --reload-include '*.py'
+      --reload-include '*.html'
+      --reload-exclude 'data/*'
+      --reload-exclude 'uploads/*'"
+    restart: unless-stopped
