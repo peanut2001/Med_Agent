@@ -1,3 +1,13 @@
+FROM node:22-slim AS frontend-build
+
+WORKDIR /frontend
+
+COPY frontend/package*.json ./
+RUN npm ci
+
+COPY frontend/ ./
+RUN npm run build
+
 # Base image with Python 3.11
 FROM python:3.11-slim
 
@@ -8,6 +18,7 @@ WORKDIR /app
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     ffmpeg \
+    curl \
     build-essential \
     # OpenCV dependencies
     libgl1 \
@@ -37,6 +48,7 @@ RUN pip install --no-cache-dir --retries 5 -r requirements.txt
 
 # Copy application code
 COPY . .
+COPY --from=frontend-build /frontend/dist ./frontend/dist
 
 # Create necessary directories
 RUN mkdir -p uploads/backend uploads/frontend uploads/skin_lesion_output uploads/speech data

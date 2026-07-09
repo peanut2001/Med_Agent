@@ -6,11 +6,11 @@ import glob
 import threading
 import time
 from io import BytesIO
+from pathlib import Path
 
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends, Request, Response, Cookie
-from fastapi.responses import JSONResponse, FileResponse, HTMLResponse
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends, Response, Cookie
+from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -37,6 +37,8 @@ app.add_middleware(
         "http://127.0.0.1:5500",
         "http://localhost:8000",
         "http://127.0.0.1:8000",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -57,8 +59,10 @@ for directory in [UPLOAD_FOLDER, FRONTEND_UPLOAD_FOLDER, SKIN_LESION_OUTPUT, SPE
 app.mount("/data", StaticFiles(directory="data"), name="data")
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
-# Set up templates
-templates = Jinja2Templates(directory="templates")
+FRONTEND_DIST = Path("frontend/dist")
+FRONTEND_INDEX = FRONTEND_DIST / "index.html"
+FRONTEND_ASSETS = FRONTEND_DIST / "assets"
+app.mount("/assets", StaticFiles(directory=FRONTEND_ASSETS, check_dir=False), name="frontend-assets")
 
 # Initialize ElevenLabs client
 client = ElevenLabs(
@@ -96,10 +100,12 @@ class SpeechRequest(BaseModel):
     text: str
     voice_id: str = "EXAMPLE_VOICE_ID"  # Default voice ID
 
-@app.get("/", response_class=HTMLResponse)
-async def index(request: Request):
-    """Serve the main HTML page"""
-    return templates.TemplateResponse("index.html", {"request": request})
+@app.get("/")
+async def index():
+    """Serve the React frontend built by Vite."""
+    if not FRONTEND_INDEX.exists():
+        raise HTTPException(status_code=503, detail="React frontend is not built. Run `cd frontend && npm run build`.")
+    return FileResponse(FRONTEND_INDEX)
 
 @app.get("/health")
 def health_check():

@@ -93,7 +93,7 @@
 | 知识存储 | Qdrant 向量数据库 |
 | 护栏 | LangChain |
 | 语音处理 | Eleven Labs API |
-| 前端 | HTML / CSS / JavaScript |
+| 前端 | React / TypeScript / Vite |
 | 部署 | Docker / GitHub Actions CI/CD |
 
 ---
@@ -103,6 +103,7 @@
 ### 前置条件
 
 - Python 3.11+
+- Node.js 20+（仅本地开发或手动构建前端时需要）
 - 所需服务的 API 密钥（详见下方环境变量配置）
 
 ### 环境变量配置
@@ -257,7 +258,18 @@ winget install ffmpeg                 # Windows
 pip install -r requirements.txt
 ```
 
-#### 4. 运行应用
+#### 4. 安装并构建 React 前端
+
+```bash
+cd frontend
+npm install
+npm run build
+cd ..
+```
+
+构建完成后，FastAPI 会托管 `frontend/dist/index.html`。如果尚未构建前端，`/` 会返回 503 并提示先运行前端构建命令。
+
+#### 5. 运行应用
 
 ```bash
 python app.py
@@ -265,7 +277,24 @@ python app.py
 
 应用地址：[http://localhost:8000](http://localhost:8000)
 
-#### 5. 导入数据到向量数据库
+#### 6. 前端开发模式
+
+本地改 React 页面时，可以分别启动后端和 Vite：
+
+```bash
+# 终端 1：启动后端
+uvicorn app:app --reload
+
+# 终端 2：启动前端开发服务器
+cd frontend
+npm run dev
+```
+
+前端开发地址：[http://localhost:5173](http://localhost:5173)
+
+Vite 已配置代理，`/chat`、`/upload`、`/validate`、`/transcribe`、`/generate-speech` 会转发到 `http://127.0.0.1:8000`。
+
+#### 7. 导入数据到向量数据库
 
 ```bash
 # 导入单个文档
