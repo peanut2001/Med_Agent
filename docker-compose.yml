@@ -1,0 +1,15 @@
+services:
+  medical-assistant:
+    build: .
+    image: medical-assistant:latest
+    container_name: medical-assistant
+    ports:
+      - "8000:8000"            # 本机访问 http://localhost:8000
+    env_file:
+      - .env                   # 注入 LLM API Key 等（不打包进镜像）
+    environment:
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./data:/app/data       # 持久化 Qdrant / RAG 状态
+      - ./uploads:/app/uploads # 持久化上传与生成文件
+    restart: unless-stopped
