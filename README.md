@@ -277,22 +277,36 @@ python app.py
 
 应用地址：[http://localhost:8000](http://localhost:8000)
 
-#### 6. 前端开发模式
+#### 6. Docker 前端热更新开发模式
 
-本地改 React 页面时，可以分别启动后端和 Vite：
+使用开发 Compose 同时启动 FastAPI 和 Vite：
 
 ```bash
-# 终端 1：启动后端
-uvicorn app:app --reload
-
-# 终端 2：启动前端开发服务器
-cd frontend
-npm run dev
+docker compose -f docker-compose.dev.yml up -d --build
 ```
 
-前端开发地址：[http://localhost:5173](http://localhost:5173)
+开发地址：
 
-Vite 已配置代理，`/chat`、`/upload`、`/validate`、`/transcribe`、`/generate-speech` 会转发到 `http://127.0.0.1:8000`。
+- 前端 Vite 热更新：[http://localhost:5173](http://localhost:5173)
+- 后端 API：[http://localhost:8001](http://localhost:8001)
+
+`frontend/src`、CSS 或组件保存后，Vite 会自动热更新浏览器，不需要重新构建镜像。Python 文件修改后，后端容器也会自动重载。开发时请访问 `5173`，不要访问生产容器使用的 `8000`。
+
+查看日志或停止开发环境：
+
+```bash
+docker compose -f docker-compose.dev.yml logs -f
+docker compose -f docker-compose.dev.yml down
+```
+
+如果修改了 `frontend/package.json`，重启开发 Compose 即可安装新依赖；如需完全重置依赖卷，可执行：
+
+```bash
+docker compose -f docker-compose.dev.yml down -v
+docker compose -f docker-compose.dev.yml up -d --build
+```
+
+也可以不使用 Docker，分别运行 `uvicorn app:app --reload` 与 `cd frontend && npm run dev`。Vite 默认代理到 `http://127.0.0.1:8000`，Docker 开发环境则通过 `VITE_BACKEND_TARGET` 代理到后端服务。
 
 #### 7. 导入数据到向量数据库
 

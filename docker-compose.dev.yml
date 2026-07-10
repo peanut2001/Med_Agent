@@ -1,4 +1,4 @@
-services:
+﻿services:
   medical-assistant-dev:
     build: .
     image: medical-assistant:dev
@@ -15,13 +15,38 @@ services:
       - /app/venv
       - /app/__pycache__
       - /app/.git
+      - ./data:/app/data
+      - ./uploads:/app/uploads
     command: >
       sh -c "pip install -q watchfiles &&
       exec uvicorn app:app
       --host 0.0.0.0 --port 8000
       --reload
       --reload-include '*.py'
-      --reload-include '*.html'
       --reload-exclude 'data/*'
-      --reload-exclude 'uploads/*'"
+      --reload-exclude 'uploads/*'
+      --reload-exclude 'frontend/*'"
     restart: unless-stopped
+
+  frontend-dev:
+    image: node:22-slim
+    container_name: medical-assistant-frontend-dev
+    working_dir: /frontend
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_BACKEND_TARGET=http://medical-assistant-dev:8000
+      - CHOKIDAR_USEPOLLING=true
+    volumes:
+      - ./frontend:/frontend
+      - frontend-node-modules:/frontend/node_modules
+    command: >
+      sh -c "npm config set registry https://registry.npmmirror.com &&
+      npm install &&
+      npm run dev -- --host 0.0.0.0"
+    depends_on:
+      - medical-assistant-dev
+    restart: unless-stopped
+
+volumes:
+  frontend-node-modules:

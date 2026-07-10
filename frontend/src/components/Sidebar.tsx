@@ -1,96 +1,94 @@
-import {
-  Activity,
-  Brain,
-  Database,
-  FileSearch,
+﻿import {
+  BrainCircuit,
   HeartPulse,
-  Image,
+  ImagePlus,
   MessageSquareText,
   Mic,
+  RotateCcw,
   ShieldCheck,
-  Stethoscope,
-  UserCheck
+  Sparkles
 } from "lucide-react";
 
 type SidebarProps = {
   onClear: () => void;
 };
 
+const capabilities = [
+  {
+    icon: MessageSquareText,
+    title: "智能问答",
+    description: "症状、用药与健康信息咨询"
+  },
+  {
+    icon: ImagePlus,
+    title: "影像分析",
+    description: "脑部、胸片与皮肤图像辅助识别"
+  },
+  {
+    icon: Mic,
+    title: "语音交互",
+    description: "语音转写与回复朗读"
+  }
+];
+
 export function Sidebar({ onClear }: SidebarProps) {
   return (
-    <aside className="sidebar">
+    <aside className="sidebar" aria-label="应用导航">
       <div className="brand-row">
         <div className="brand-mark" aria-hidden="true">
-          <HeartPulse size={24} />
+          <HeartPulse size={23} strokeWidth={2.2} />
         </div>
-        <div>
-          <span className="eyebrow">Clinical AI Workspace</span>
+        <div className="brand-copy">
+          <span className="eyebrow">Dolphin Clinical AI</span>
           <h1>海豚医疗智能助手</h1>
-          <p>多智能体协同的医疗问答、检索与影像辅助分析工作台。</p>
         </div>
       </div>
 
-      <section className="sidebar-section">
-        <h2>智能体链路</h2>
-        <ul className="feature-list">
-          <li>
-            <MessageSquareText size={18} />
-            <span>医疗对话智能体处理症状咨询与健康问答。</span>
-          </li>
-          <li>
-            <Database size={18} />
-            <span>RAG 检索智能体整合文档、表格与图像摘要。</span>
-          </li>
-          <li>
-            <FileSearch size={18} />
-            <span>置信度不足时交接网络搜索补充公开信息。</span>
-          </li>
-        </ul>
-      </section>
-
-      <section className="sidebar-section sidebar-section--accent">
-        <h2>影像分析</h2>
-        <div className="capability-grid">
-          <span>
-            <Brain size={16} />
-            脑肿瘤检测
-          </span>
-          <span>
-            <Activity size={16} />
-            胸部 X 光分类
-          </span>
-          <span>
-            <Image size={16} />
-            皮肤病变分割
-          </span>
+      <div className="system-card" aria-label="系统状态">
+        <div className="system-card__heading">
+          <span className="status-dot" aria-hidden="true" />
+          <strong>智能体系统在线</strong>
         </div>
-      </section>
+        <p>根据问题类型自动调度医疗问答、检索与影像分析能力。</p>
+      </div>
 
-      <section className="sidebar-section">
-        <h2>工作流保障</h2>
-        <ul className="feature-list">
-          <li>
-            <ShieldCheck size={18} />
-            <span>输入输出护栏减少误导性医学建议。</span>
-          </li>
-          <li>
-            <UserCheck size={18} />
-            <span>关键影像输出支持人工确认和复核。</span>
-          </li>
-          <li>
-            <Mic size={18} />
-            <span>语音转写和文字转语音适配临床沟通。</span>
-          </li>
+      <nav className="capability-nav" aria-label="核心能力">
+        <div className="section-label">核心能力</div>
+        <ul>
+          {capabilities.map(({ icon: Icon, title, description }) => (
+            <li key={title}>
+              <span className="capability-icon" aria-hidden="true">
+                <Icon size={18} />
+              </span>
+              <span>
+                <strong>{title}</strong>
+                <small>{description}</small>
+              </span>
+            </li>
+          ))}
         </ul>
+      </nav>
+
+      <div className="sidebar-spacer" />
+
+      <section className="safety-note" aria-label="安全说明">
+        <div className="safety-note__icon" aria-hidden="true">
+          <ShieldCheck size={18} />
+        </div>
+        <div>
+          <strong>临床安全提示</strong>
+          <p>AI 输出仅供辅助参考，不能替代医生面诊与专业诊断。</p>
+        </div>
       </section>
 
       <div className="sidebar-footer">
-        <div className="system-pill">
-          <Stethoscope size={16} />
-          <span>PNG / JPG / JPEG</span>
+        <div className="sidebar-meta">
+          <span><BrainCircuit size={15} /> 多智能体协同</span>
+          <span><Sparkles size={15} /> 隐私会话</span>
         </div>
-        <button type="button" className="clear-button" onClick={onClear} aria-label="清空对话">
-          清空对话
+        <button type="button" className="clear-button" onClick={onClear} aria-label="清空当前对话">
+          <RotateCcw size={17} aria-hidden="true" />
+          <span>清空对话</span>
         </button>
       </div>
     </aside>

@@ -1,6 +1,15 @@
-import ReactMarkdown from "react-markdown";
+﻿import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Bot, Loader2, UserRound } from "lucide-react";
+import {
+  Bot,
+  BrainCircuit,
+  ImagePlus,
+  Loader2,
+  MessageSquareText,
+  Mic,
+  ShieldCheck,
+  UserRound
+} from "lucide-react";
 import type { ChatMessage } from "../types";
 import { AudioReplyButton } from "./AudioReplyButton";
 import { ValidationPanel } from "./ValidationPanel";
@@ -10,20 +19,59 @@ type MessageListProps = {
   onValidate: (validation: "yes" | "no", comments: string) => Promise<void>;
 };
 
+const starterCards = [
+  {
+    icon: MessageSquareText,
+    title: "描述健康问题",
+    description: "说明症状、持续时间和相关病史，获取结构化参考信息。"
+  },
+  {
+    icon: ImagePlus,
+    title: "上传医学影像",
+    description: "支持 PNG、JPG、JPEG，可附上希望重点分析的内容。"
+  },
+  {
+    icon: Mic,
+    title: "使用语音输入",
+    description: "录制问题并自动转写，转写结果仍可编辑后发送。"
+  }
+];
+
+function statusClassName(status?: string) {
+  if (status === "异常" || status === "需复查") return "status-label status-label--danger";
+  if (status === "已确认") return "status-label status-label--success";
+  if (status === "分析中" || status === "复核中") return "status-label status-label--progress";
+  return "status-label";
+}
+
 export function MessageList({ messages, onValidate }: MessageListProps) {
   if (messages.length === 0) {
     return (
       <div className="welcome-state">
-        <div className="welcome-kicker">系统就绪</div>
-        <h2>从一个问题、一张影像或一段语音开始。</h2>
-        <p>
-          海豚医疗智能助手会在医疗问答、RAG 检索、网络搜索和影像分析智能体之间协同处理，并在需要时进入人工复核。
+        <div className="welcome-icon" aria-hidden="true">
+          <BrainCircuit size={30} />
+        </div>
+        <div className="welcome-kicker">智能医疗协作空间</div>
+        <h2>今天想了解什么健康问题？</h2>
+        <p className="welcome-lead">
+          你可以输入文字、上传医学影像或使用语音。系统会自动选择合适的医疗智能体协同处理。
         </p>
-        <div className="welcome-grid">
-          <span>医疗问答</span>
-          <span>影像分析</span>
-          <span>语音转写</span>
-          <span>人工复核</span>
+
+        <div className="starter-grid">
+          {starterCards.map(({ icon: Icon, title, description }) => (
+            <article key={title} className="starter-card">
+              <span className="starter-card__icon" aria-hidden="true"><Icon size={20} /></span>
+              <div>
+                <h3>{title}</h3>
+                <p>{description}</p>
+              </div>
+            </article>
+          ))}
+        </div>
+
+        <div className="welcome-trust">
+          <span><ShieldCheck size={15} /> 输入输出安全护栏</span>
+          <span><UserRound size={15} /> 关键结果支持人工复核</span>
         </div>
       </div>
     );
@@ -31,59 +79,67 @@ export function MessageList({ messages, onValidate }: MessageListProps) {
 
   return (
     <div className="message-stack">
-      {messages.map((message) => (
-        <article key={message.id} className={`message message--${message.role}`}>
-          <div className="message-meta">
-            <span className="message-avatar" aria-hidden="true">
-              {message.role === "user" ? <UserRound size={16} /> : <Bot size={16} />}
-            </span>
-            <span className="agent-label">{message.agent || (message.role === "user" ? "用户输入" : "系统")}</span>
-            {message.statusLabel ? <span className="status-label">{message.statusLabel}</span> : null}
-          </div>
+      {messages.map((message) => {
+        const isPending = message.statusLabel === "分析中" || message.statusLabel === "复核中";
+        const displayAgent = message.agent || (message.role === "user" ? "你的问题" : "医疗智能助手");
 
-          <div className="message-surface">
-            {message.statusLabel === "分析中" ? (
-              <div className="thinking-row">
-                <Loader2 className="spin" size={18} />
-                <span>{message.content}</span>
-              </div>
-            ) : message.role === "assistant" ? (
-              <div className="markdown-body">
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
-              </div>
-            ) : (
-              <p>{message.content}</p>
-            )}
+        return (
+          <article key={message.id} className={`message message--${message.role}`}>
+            <div className="message-meta">
+              <span className="message-avatar" aria-hidden="true">
+                {message.role === "user" ? <UserRound size={17} /> : <Bot size={17} />}
+              </span>
+              <span className="agent-label">{displayAgent}</span>
+              {message.statusLabel ? <span className={statusClassName(message.statusLabel)}>{message.statusLabel}</span> : null}
+            </div>
 
-            {message.imagePreview ? (
-              <div className={message.resultImage ? "image-compare" : "message-image-wrap"}>
-                <figure>
-                  <img src={message.imagePreview} alt="上传的医学图像" />
-                  {message.resultImage ? <figcaption>原始图像</figcaption> : null}
-                </figure>
-                {message.resultImage ? (
+            <div className="message-surface">
+              {isPending ? (
+                <div className="thinking-row">
+                  <Loader2 className="spin" size={18} />
+                  <div>
+                    <strong>{message.statusLabel === "复核中" ? "正在提交复核" : "正在分析你的问题"}</strong>
+                    <span>{message.content}</span>
+                  </div>
+                </div>
+              ) : message.role === "assistant" ? (
+                <div className="markdown-body">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
+                </div>
+              ) : (
+                <p>{message.content}</p>
+              )}
+
+              {message.imagePreview ? (
+                <div className={message.resultImage ? "image-compare" : "message-image-wrap"}>
                   <figure>
-                    <img src={message.resultImage} alt="分析结果图像" />
-                    <figcaption>分割结果</figcaption>
+                    <img src={message.imagePreview} alt="上传的医学图像" />
+                    {message.resultImage ? <figcaption>原始图像</figcaption> : null}
                   </figure>
-                ) : null}
-              </div>
-            ) : message.resultImage ? (
-              <div className="message-image-wrap">
-                <img src={message.resultImage} alt="分析结果图像" />
-              </div>
-            ) : null}
+                  {message.resultImage ? (
+                    <figure>
+                      <img src={message.resultImage} alt="分析结果图像" />
+                      <figcaption>分析结果</figcaption>
+                    </figure>
+                  ) : null}
+                </div>
+              ) : message.resultImage ? (
+                <div className="message-image-wrap">
+                  <img src={message.resultImage} alt="分析结果图像" />
+                </div>
+              ) : null}
 
-            {message.role === "assistant" && message.statusLabel !== "分析中" ? (
-              <div className="message-actions">
-                <AudioReplyButton text={message.content} />
-              </div>
-            ) : null}
+              {message.role === "assistant" && !isPending ? (
+                <div className="message-actions">
+                  <AudioReplyButton text={message.content} />
+                </div>
+              ) : null}
 
-            {message.requiresValidation ? <ValidationPanel onSubmit={onValidate} /> : null}
-          </div>
-        </article>
-      ))}
+              {message.requiresValidation ? <ValidationPanel onSubmit={onValidate} /> : null}
+            </div>
+          </article>
+        );
+      })}
     </div>
   );
 }
