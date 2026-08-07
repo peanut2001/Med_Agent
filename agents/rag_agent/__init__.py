@@ -25,7 +25,7 @@ class MedicalRAG:
         self.logger = logging.getLogger(f"{self.__module__}")
         self.logger.info("Initializing Medical RAG system")
         self.config = config
-        self.doc_parser = MedicalDocParser()
+        self.doc_parser = MedicalDocParser(config)
         self.content_processor = ContentProcessor(config)
         self.vector_store = VectorStore(config)
         self.reranker = Reranker(config)

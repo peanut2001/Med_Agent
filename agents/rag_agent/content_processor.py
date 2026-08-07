@@ -129,19 +129,26 @@ class ContentProcessor:
     def chunk_document(self, formatted_document: str) -> List[str]:
         """
         Split the document into semantic chunks.
-        
+
+        The remote document parser returns a flat text stream with no markdown
+        headings, so the document is first cut into paragraph-based windows and
+        then handed to the LLM to pick the semantic split points.
+
         Args:
             formatted_document: Formatted document text
-            model: ChatOpenAI model instance (will create one if not provided)
-            
+
         Returns:
             List of document chunks
         """
-        
-        # Split by section boundaries
-        SPLIT_PATTERN = "\n#"
-        chunks = formatted_document.split(SPLIT_PATTERN)
-        
+
+        # Pre-split into coarse blocks. Markdown headings are used when present
+        # (older ingested content), otherwise fall back to paragraph windows.
+        if "\n#" in formatted_document:
+            SPLIT_PATTERN = "\n#"
+            chunks = formatted_document.split(SPLIT_PATTERN)
+        else:
+            chunks = self._split_into_windows(formatted_document)
+
         chunked_text = ""
         for i, chunk in enumerate(chunks):
             if chunk.startswith("#"):
@@ -175,6 +182,53 @@ class ContentProcessor:
         chunking_response = self.chunker_model.invoke(formatted_chunking_prompt).content
         
         return self._split_text_by_llm_suggestions(chunked_text, chunking_response)
+
+    def _split_into_windows(self, text: str, target_words: int = 200) -> List[str]:
+        """
+        Group text blocks into windows of roughly ``target_words`` words.
+
+        Used when the source text carries no markdown headings. The document is
+        split on blank lines first and then on single newlines, so a page that
+        arrives as one dense block still gets broken up. Block boundaries are
+        never broken mid-line.
+
+        Args:
+            text: Document text
+            target_words: Approximate word count per window
+
+        Returns:
+            List of text windows
+        """
+        blocks: List[str] = []
+        for paragraph in text.split("\n\n"):
+            paragraph = paragraph.strip()
+            if not paragraph:
+                continue
+            if len(paragraph.split()) <= target_words:
+                blocks.append(paragraph)
+            else:
+                # Dense page: fall back to line-level blocks.
+                blocks.extend(line.strip() for line in paragraph.split("\n") if line.strip())
+
+        if not blocks:
+            return [text]
+
+        windows = []
+        current: List[str] = []
+        current_words = 0
+
+        for block in blocks:
+            current.append(block)
+            current_words += len(block.split())
+            if current_words >= target_words:
+                windows.append("\n".join(current))
+                current = []
+                current_words = 0
+
+        if current:
+            windows.append("\n".join(current))
+
+        return windows
     
     def _split_text_by_llm_suggestions(self, chunked_text: str, llm_response: str) -> List[str]:
         """

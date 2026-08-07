@@ -20,9 +20,44 @@ load_dotenv()
 # Common LLM configuration
 API_KEY = os.getenv("OPENAI_API_KEY")
 API_BASE = os.getenv("OPENAI_API_BASE", "https://api.yunnet.top/v1")
-MODEL_NAME = os.getenv("MODEL_NAME", "claude-opus-4-6")
-EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "text-embedding-v4")
-EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "1536"))
+MODEL_NAME = os.getenv("MODEL_NAME", "claude-opus-4-8")
+EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "qwen3-embedding-8b")
+EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "4096"))
+# 部分模型（如 qwen3-embedding-8b）不支持 matryoshka 降维，
+# 请求中带 dimensions 参数会直接返回 400，需要显式关闭。
+EMBEDDING_SUPPORTS_DIMENSIONS = os.getenv("EMBEDDING_SUPPORTS_DIMENSIONS", "false").lower() in ("1", "true", "yes")
+# The embedding provider is often a different gateway than the chat LLM one.
+# Fall back to the chat gateway when not configured separately.
+EMBEDDING_API_BASE = os.getenv("EMBEDDING_API_BASE") or API_BASE
+EMBEDDING_API_KEY = os.getenv("EMBEDDING_API_KEY") or API_KEY
+
+# Reranker configuration. Defaults to the same gateway as the embedding model,
+# since both are typically served by the same local inference endpoint.
+RERANKER_MODEL_NAME = os.getenv("RERANKER_MODEL_NAME", "qwen3-reranker-0.6b")
+RERANKER_API_BASE = os.getenv("RERANKER_API_BASE") or EMBEDDING_API_BASE
+RERANKER_API_KEY = os.getenv("RERANKER_API_KEY") or EMBEDDING_API_KEY
+
+# Document parsing is done by a remote vision model over the OpenAI-compatible
+# chat endpoint, one rendered page at a time.
+DOC_PARSER_MODEL_NAME = os.getenv("DOC_PARSER_MODEL_NAME", "mineru2.5-pro-2605-1.2b")
+DOC_PARSER_API_BASE = os.getenv("DOC_PARSER_API_BASE") or EMBEDDING_API_BASE
+DOC_PARSER_API_KEY = os.getenv("DOC_PARSER_API_KEY") or EMBEDDING_API_KEY
+
+
+def create_embeddings() -> OpenAIEmbeddings:
+    """Create the shared OpenAIEmbeddings instance.
+
+    ``dimensions`` is only sent when the provider actually supports it,
+    otherwise the request is rejected with a 400.
+    """
+    kwargs = {
+        "model": EMBEDDING_MODEL_NAME,
+        "openai_api_key": EMBEDDING_API_KEY,
+        "openai_api_base": EMBEDDING_API_BASE,
+    }
+    if EMBEDDING_SUPPORTS_DIMENSIONS:
+        kwargs["dimensions"] = EMBEDDING_DIM
+    return OpenAIEmbeddings(**kwargs)
 
 def create_llm(temperature: float = 0.3, model: str | None = None) -> ChatOpenAI:
     """Create a ChatOpenAI instance with common configuration."""
@@ -70,12 +105,7 @@ class RAGConfig:
         self.collection_name = "medical_assistance_rag"
         self.chunk_size = 512
         self.chunk_overlap = 50
-        self.embedding_model = OpenAIEmbeddings(
-            model=EMBEDDING_MODEL_NAME,
-            dimensions=EMBEDDING_DIM,
-            openai_api_key=API_KEY,
-            openai_api_base=API_BASE,
-        )
+        self.embedding_model = create_embeddings()
         self.llm = create_llm(
             temperature=0.3,
             model=os.getenv("RAG_MODEL_NAME", MODEL_NAME),
@@ -97,8 +127,23 @@ class RAGConfig:
 
         self.huggingface_token = os.getenv("HUGGINGFACE_TOKEN")
 
-        self.reranker_model = "cross-encoder/ms-marco-TinyBERT-L-6"
+        # Reranking is served over an OpenAI-compatible /rerank endpoint.
+        self.reranker_model = RERANKER_MODEL_NAME
+        self.reranker_api_base = RERANKER_API_BASE
+        self.reranker_api_key = RERANKER_API_KEY
+        self.reranker_timeout = int(os.getenv("RERANKER_TIMEOUT", "30"))
         self.reranker_top_k = 3
+        # Per-document cap sent to the reranker. The model's context is 8192
+        # tokens for the whole batch, so leave headroom for several documents.
+        self.reranker_max_doc_chars = int(os.getenv("RERANKER_MAX_DOC_CHARS", "4000"))
+
+        # Remote document parser (vision model, page-by-page).
+        self.doc_parser_model = DOC_PARSER_MODEL_NAME
+        self.doc_parser_api_base = DOC_PARSER_API_BASE
+        self.doc_parser_api_key = DOC_PARSER_API_KEY
+        self.doc_parser_timeout = int(os.getenv("DOC_PARSER_TIMEOUT", "180"))
+        # Total context is 8192; the cap must leave room for the page image.
+        self.doc_parser_max_tokens = int(os.getenv("DOC_PARSER_MAX_TOKENS", "4096"))
 
         self.max_context_length = 8192  # (Change based on your need) # 1024 proved to be too low (retrieved content length > context length = no context added) in formatting context in response_generator code
 
