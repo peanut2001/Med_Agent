@@ -109,6 +109,11 @@ class LocalLoginRequest(BaseModel):
     username: str
     password: str
 
+
+class LocalRegisterRequest(BaseModel):
+    username: str
+    password: str
+
 @app.get("/")
 async def index():
     """Serve the React frontend built by Vite."""
@@ -136,6 +141,30 @@ def auth_login(request: LocalLoginRequest, response: Response):
     user_id = local_auth_store.authenticate(request.username, request.password)
     if not user_id:
         raise HTTPException(status_code=401, detail="Invalid username or password")
+    session_id = local_auth_store.create_session(user_id)
+    secure = os.getenv("COOKIE_SECURE", "false").lower() in {"1", "true", "yes", "on"}
+    response.set_cookie(
+        key="med_agent_session",
+        value=session_id,
+        httponly=True,
+        secure=secure,
+        samesite="lax",
+        max_age=int(os.getenv("LOCAL_AUTH_SESSION_TTL", str(12 * 3600))),
+    )
+    return {"authenticated": True, "user_id": user_id}
+
+
+@app.post("/auth/register")
+def auth_register(request: LocalRegisterRequest, response: Response):
+    """Register and sign in a local account for small trusted test deployments."""
+    if os.getenv("AUTH_MODE", "local").lower() != "local":
+        raise HTTPException(status_code=404, detail="Local authentication is disabled")
+    try:
+        user_id = local_auth_store.register(request.username, request.password)
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = 409 if "already registered" in detail else 400
+        raise HTTPException(status_code=status_code, detail=detail) from exc
     session_id = local_auth_store.create_session(user_id)
     secure = os.getenv("COOKIE_SECURE", "false").lower() in {"1", "true", "yes", "on"}
     response.set_cookie(

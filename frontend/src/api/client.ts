@@ -28,6 +28,16 @@ export async function loginLocal(username: string, password: string): Promise<{ 
   return readJson<{ authenticated: boolean; user_id: string }>(response);
 }
 
+export async function registerLocal(username: string, password: string): Promise<{ authenticated: boolean; user_id: string }> {
+  const response = await fetch("/auth/register", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ username, password })
+  });
+  return readJson<{ authenticated: boolean; user_id: string }>(response);
+}
+
 export async function logoutLocal(): Promise<void> {
   await fetch("/auth/logout", { method: "POST", credentials: "include" });
 }

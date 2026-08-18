@@ -499,5 +499,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, label:has(inp
 .auth-card input { width: 100%; box-sizing: border-box; padding: 11px 12px; border: 1px solid var(--border-strong); border-radius: 10px; font: inherit; }
 .auth-card button { border: 0; border-radius: 10px; padding: 11px 14px; background: var(--primary); color: white; font: inherit; font-weight: 800; cursor: pointer; }
 .auth-card button:disabled { opacity: 0.6; cursor: wait; }
+.auth-card .auth-switch { padding: 4px 8px; background: transparent; color: var(--primary-deep); font-size: 0.82rem; }
+.auth-card .auth-switch:hover { text-decoration: underline; }
 .auth-error { padding: 10px 12px; border-radius: 10px; background: var(--danger-soft); color: var(--danger); font-size: 0.82rem; }
 .sidebar-user { margin-bottom: 8px; color: var(--muted); font-size: 0.72rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

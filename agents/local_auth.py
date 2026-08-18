@@ -7,11 +7,13 @@ import os
 import secrets
 import sqlite3
 import time
+import re
 from pathlib import Path
 from typing import Optional
 
 
 SESSION_TTL_SECONDS = int(os.getenv("LOCAL_AUTH_SESSION_TTL", str(12 * 3600)))
+USERNAME_PATTERN = re.compile(r"^[A-Za-z0-9_.-]{3,32}$")
 
 
 class LocalAuthStore:
@@ -102,6 +104,25 @@ class LocalAuthStore:
             return str(row["user_id"])
         return None
 
+    def register(self, username: str, password: str) -> str:
+        """Create a local test account and return its user id."""
+        username = username.strip()
+        if not USERNAME_PATTERN.fullmatch(username):
+            raise ValueError("Username must be 3-32 characters using letters, numbers, ., _, or -")
+        if len(password) < 8 or len(password) > 128:
+            raise ValueError("Password must be between 8 and 128 characters")
+        user_id = username
+        now = int(time.time())
+        try:
+            with self._connect() as db:
+                db.execute(
+                    "INSERT INTO local_users(user_id, username, password_hash, created_at) VALUES (?, ?, ?, ?)",
+                    (user_id, username, self._hash_password(password), now),
+                )
+        except sqlite3.IntegrityError as exc:
+            raise ValueError("Username is already registered") from exc
+        return user_id
+
     def create_session(self, user_id: str) -> str:
         session_id = secrets.token_urlsafe(32)
         now = int(time.time())
@@ -131,4 +152,3 @@ class LocalAuthStore:
 
 
 local_auth_store = LocalAuthStore(os.getenv("LOCAL_AUTH_DB", "data/local_auth.db"))
-

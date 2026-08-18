@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { getCurrentUser, loginLocal, logoutLocal, sendChat, uploadImage, validateMedicalOutput } from "./api/client";
+import { getCurrentUser, loginLocal, registerLocal, logoutLocal, sendChat, uploadImage, validateMedicalOutput } from "./api/client";
 import { ChatPanel } from "./components/ChatPanel";
 import { Sidebar } from "./components/Sidebar";
 import { useSpeechRecorder } from "./hooks/useSpeechRecorder";
@@ -50,6 +50,7 @@ export default function App() {
   const [loginPassword, setLoginPassword] = useState("");
   const [loginError, setLoginError] = useState<string | null>(null);
   const [loginBusy, setLoginBusy] = useState(false);
+  const [authMode, setAuthMode] = useState<"login" | "register">("login");
   const objectUrlsRef = useRef<Set<string>>(new Set());
 
   const recorder = useSpeechRecorder({
@@ -94,11 +95,13 @@ export default function App() {
     setLoginBusy(true);
     setLoginError(null);
     try {
-      const data = await loginLocal(loginUsername.trim(), loginPassword);
+      const data = authMode === "register"
+        ? await registerLocal(loginUsername.trim(), loginPassword)
+        : await loginLocal(loginUsername.trim(), loginPassword);
       setCurrentUser(data.user_id);
       setLoginPassword("");
     } catch (error) {
-      setLoginError(error instanceof Error ? error.message : "登录失败，请检查用户名和密码。");
+      setLoginError(error instanceof Error ? error.message : authMode === "register" ? "注册失败，请检查输入。" : "登录失败，请检查用户名和密码。");
     } finally {
       setLoginBusy(false);
     }
@@ -225,18 +228,21 @@ export default function App() {
       <main className="auth-screen">
         <form className="auth-card" onSubmit={(event) => void handleLogin(event)}>
           <div className="welcome-kicker">MED AGENT</div>
-          <h1>登录医疗助手</h1>
-          <p>请输入本地测试账号继续使用。</p>
+          <h1>{authMode === "register" ? "注册医疗助手" : "登录医疗助手"}</h1>
+          <p>{authMode === "register" ? "创建一个本地测试账号，注册后将自动登录。" : "请输入本地测试账号继续使用。"}</p>
           <label>
             用户名
             <input value={loginUsername} onChange={(event) => setLoginUsername(event.target.value)} autoComplete="username" required />
           </label>
           <label>
             密码
-            <input type="password" value={loginPassword} onChange={(event) => setLoginPassword(event.target.value)} autoComplete="current-password" required />
+            <input type="password" value={loginPassword} onChange={(event) => setLoginPassword(event.target.value)} autoComplete={authMode === "register" ? "new-password" : "current-password"} minLength={8} required />
           </label>
           {loginError && <div className="auth-error">{loginError}</div>}
-          <button type="submit" disabled={loginBusy}>{loginBusy ? "登录中…" : "登录"}</button>
+          <button type="submit" disabled={loginBusy}>{loginBusy ? (authMode === "register" ? "注册中…" : "登录中…") : authMode === "register" ? "注册并登录" : "登录"}</button>
+          <button type="button" className="auth-switch" onClick={() => { setAuthMode(authMode === "login" ? "register" : "login"); setLoginError(null); }}>
+            {authMode === "register" ? "已有账号？返回登录" : "没有账号？立即注册"}
+          </button>
         </form>
       </main>
     );

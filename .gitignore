@@ -35,6 +35,7 @@ Thumbs.db
 data/qdrant_db/
 data/docs_db/
 data/parsed_docs/
+data/local_auth.db
 uploads/
 
 # Claude Code / agent workspaces
