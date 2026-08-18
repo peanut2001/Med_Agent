@@ -18,19 +18,19 @@
 
 In `agent_decision.py`:
 
-1. Interrupt the workflow when human validation is needed
-2. Store the interrupted state in memory
-3. Add endpoints to expose pending validations and submit validation decisions
-4. Resume the workflow after the human has provided feedback
+1. Create a user- and conversation-scoped validation record when human validation is needed
+2. Return a `validation_id` to the client
+3. Validate ownership before accepting a decision
+4. Resolve the record idempotently without re-routing the validation text as a new user query
 
 On frontend:
 
-1. Check if a response needs validation (needs_validation flag)
+1. Check if a response needs validation (`requires_validation` and `validation_id`)
 2. If so, show a validation interface to the human reviewer
 3. Send the validation decision back through the /validate endpoint
 4. Continue the conversation
 
-Implemented a complete human-in-the-loop validation system using LangGraph's NodeInterrupt functionality, integrated with the backend and frontend.
+Implemented a user- and conversation-scoped human-in-the-loop validation flow integrated with the backend and frontend.
 
 ---
 
@@ -66,4 +66,3 @@ Implemented a complete human-in-the-loop validation system using LangGraph's Nod
 12. Zahra Mirikharaji, Kumar Abhishek, Alceu Bissoto, Catarina Barata, Sandra Avila, Eduardo Valle, M. Emre Celebi, Ghassan Hamarneh. A survey on deep learning for skin lesion segmentation. Medical Image Analysis, Volume 88, 2023, 102863, ISSN 1361-8415. [https://doi.org/10.1016/j.media.2023.102863](https://doi.org/10.1016/j.media.2023.102863)
 
 ---
-

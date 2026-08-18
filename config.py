@@ -190,6 +190,8 @@ class APIConfig:
         self.debug = True
         self.rate_limit = 10
         self.max_image_upload_size = 5  # max upload size in MB
+        self.checkpoint_database_url = os.getenv("CHECKPOINT_DATABASE_URL", "")
+        self.auth_required = os.getenv("AUTH_REQUIRED", "true").lower() in ("1", "true", "yes", "on")
 
 class UIConfig:
     def __init__(self):

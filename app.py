@@ -8,7 +8,7 @@ import time
 from io import BytesIO
 from pathlib import Path
 
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends, Response, Cookie
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends, Response, Cookie, Request
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -22,6 +22,8 @@ from elevenlabs.client import ElevenLabs
 
 from config import Config
 from agents.agent_decision import process_query
+from agents.security import CurrentUser, get_current_user, resolve_conversation_id
+from agents.validation_store import validation_store
 
 # Load configuration
 config = Config()
@@ -95,6 +97,7 @@ cleanup_thread.start()
 class QueryRequest(BaseModel):
     query: str
     conversation_history: List = []
+    conversation_id: Optional[str] = None
 
 class SpeechRequest(BaseModel):
     text: str
@@ -116,6 +119,8 @@ def health_check():
 def chat(
     request: QueryRequest, 
     response: Response, 
+    http_request: Request,
+    current_user: CurrentUser = Depends(get_current_user),
     session_id: Optional[str] = Cookie(None)
 ):
     """Process user text query through the multi-agent system."""
@@ -123,18 +128,27 @@ def chat(
     if not session_id:
         session_id = str(uuid.uuid4())
     
+    conversation_id = resolve_conversation_id(http_request, request.conversation_id)
     try:
-        response_data = process_query(request.query)
+        response_data = process_query(
+            request.query,
+            user_id=current_user.user_id,
+            conversation_id=conversation_id,
+        )
         response_text = response_data['messages'][-1].content
         
         # Set session cookie
         response.set_cookie(key="session_id", value=session_id)
+        response.set_cookie(key="conversation_id", value=conversation_id, httponly=True, samesite="lax")
 
         # Check if the agent is skin lesion segmentation and find the image path
         result = {
             "status": "success",
             "response": response_text, 
-            "agent": response_data["agent_name"]
+            "agent": response_data["agent_name"],
+            "conversation_id": conversation_id,
+            "validation_id": response_data.get("validation_id"),
+            "requires_validation": bool(response_data.get("validation_id")),
         }
         
         # If it's the skin lesion segmentation agent, check for output image
@@ -154,8 +168,11 @@ def chat(
 @app.post("/upload")
 async def upload_image(
     response: Response,
+    request: Request,
     image: UploadFile = File(...), 
     text: str = Form(""),
+    conversation_id: Optional[str] = Form(None),
+    current_user: CurrentUser = Depends(get_current_user),
     session_id: Optional[str] = Cookie(None)
 ):
     """Process medical image uploads with optional text input."""
@@ -185,6 +202,7 @@ async def upload_image(
     # Generate session ID for cookie if it doesn't exist
     if not session_id:
         session_id = str(uuid.uuid4())
+    conversation_id = resolve_conversation_id(request, conversation_id)
     
     # Save file securely
     filename = secure_filename(f"{uuid.uuid4()}_{image.filename}")
@@ -194,17 +212,25 @@ async def upload_image(
     
     try:
         query = {"text": text, "image": file_path}
-        response_data = process_query(query)
+        response_data = process_query(
+            query,
+            user_id=current_user.user_id,
+            conversation_id=conversation_id,
+        )
         response_text = response_data['messages'][-1].content
 
         # Set session cookie
         response.set_cookie(key="session_id", value=session_id)
+        response.set_cookie(key="conversation_id", value=conversation_id, httponly=True, samesite="lax")
 
         # Check if the agent is skin lesion segmentation and find the image path
         result = {
             "status": "success",
             "response": response_text, 
-            "agent": response_data["agent_name"]
+            "agent": response_data["agent_name"],
+            "conversation_id": conversation_id,
+            "validation_id": response_data.get("validation_id"),
+            "requires_validation": bool(response_data.get("validation_id")),
         }
         
         # If it's the skin lesion segmentation agent, check for output image
@@ -228,39 +254,53 @@ async def upload_image(
 @app.post("/validate")
 def validate_medical_output(
     response: Response,
+    request: Request,
     validation_result: str = Form(...), 
     comments: Optional[str] = Form(None),
+    validation_id: str = Form(...),
+    conversation_id: Optional[str] = Form(None),
+    current_user: CurrentUser = Depends(get_current_user),
     session_id: Optional[str] = Cookie(None)
 ):
     """Handle human validation for medical AI outputs."""
     # Generate session ID for cookie if it doesn't exist
     if not session_id:
         session_id = str(uuid.uuid4())
+    conversation_id = resolve_conversation_id(request, conversation_id)
 
     try:
         # Set session cookie
         response.set_cookie(key="session_id", value=session_id)
-        
-        # Re-run the agent decision system with the validation input
-        validation_query = f"Validation result: {validation_result}"
-        if comments:
-            validation_query += f" Comments: {comments}"
-        
-        response_data = process_query(validation_query)
+        response.set_cookie(key="conversation_id", value=conversation_id, httponly=True, samesite="lax")
+        record = validation_store.resolve(
+            validation_id,
+            user_id=current_user.user_id,
+            conversation_id=conversation_id,
+            result=validation_result,
+            comments=comments,
+        )
 
-        if validation_result.lower() == 'yes':
+        if record.status == 'approved':
             return {
                 "status": "validated",
                 "message": "**Output confirmed by human validator:**",
-                "response": response_data['messages'][-1].content
+                "response": record.original_output,
+                "validation_id": validation_id,
+                "conversation_id": conversation_id,
             }
         else:
             return {
                 "status": "rejected",
                 "comments": comments,
                 "message": "**Output requires further review:**",
-                "response": response_data['messages'][-1].content
+                "response": "The previous medical analysis requires further review.",
+                "validation_id": validation_id,
+                "conversation_id": conversation_id,
             }
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail="Validation does not belong to this user or conversation") from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Validation request not found") from exc
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

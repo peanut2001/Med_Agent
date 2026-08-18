@@ -13,7 +13,7 @@ async function readJson<T>(response: Response): Promise<T> {
   return data;
 }
 
-export async function sendChat(query: string): Promise<AgentResponse> {
+export async function sendChat(query: string, conversationId?: string): Promise<AgentResponse> {
   const response = await fetch("/chat", {
     method: "POST",
     headers: {
@@ -21,7 +21,8 @@ export async function sendChat(query: string): Promise<AgentResponse> {
     },
     body: JSON.stringify({
       query,
-      conversation_history: []
+      conversation_history: [],
+      conversation_id: conversationId
     }),
     credentials: "include"
   });
@@ -29,10 +30,11 @@ export async function sendChat(query: string): Promise<AgentResponse> {
   return readJson<AgentResponse>(response);
 }
 
-export async function uploadImage(text: string, image: File): Promise<AgentResponse> {
+export async function uploadImage(text: string, image: File, conversationId?: string): Promise<AgentResponse> {
   const formData = new FormData();
   formData.append("text", text);
   formData.append("image", image);
+  if (conversationId) formData.append("conversation_id", conversationId);
 
   const response = await fetch("/upload", {
     method: "POST",
@@ -45,11 +47,15 @@ export async function uploadImage(text: string, image: File): Promise<AgentRespo
 
 export async function validateMedicalOutput(
   validationResult: "yes" | "no",
-  comments: string
+  comments: string,
+  validationId: string,
+  conversationId?: string
 ): Promise<ValidationResponse> {
   const formData = new FormData();
   formData.append("validation_result", validationResult);
   formData.append("comments", comments);
+  formData.append("validation_id", validationId);
+  if (conversationId) formData.append("conversation_id", conversationId);
 
   const response = await fetch("/validate", {
     method: "POST",

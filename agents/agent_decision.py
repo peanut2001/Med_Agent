@@ -19,7 +19,8 @@ from agents.web_search_processor_agent import WebSearchProcessorAgent
 from agents.image_analysis_agent import ImageAnalysisAgent
 from agents.guardrails.local_guardrails import LocalGuardrails
 
-from langgraph.checkpoint.memory import MemorySaver
+from agents.checkpoint import get_checkpointer
+from agents.validation_store import validation_store
 
 import cv2
 import numpy as np
@@ -31,11 +32,7 @@ load_dotenv()
 # Load configuration
 config = Config()
 
-# Initialize memory
-memory = MemorySaver()
-
-# Specify a thread
-thread_config = {"configurable": {"thread_id": "1"}}
+_compiled_graph = None
 
 
 # Agent that takes the decision of routing the request further to correct task specific agent
@@ -85,15 +82,24 @@ class AgentConfig:
 class AgentState(MessagesState):
     """State maintained across the workflow."""
     # messages: List[BaseMessage]  # Conversation history
-    agent_name: Optional[str]  # Current active agent
+    agent_name: Optional[str]  # Current active agent (legacy API field)
+    selected_agent: Optional[str]
+    decision_confidence: float
     current_input: Optional[Union[str, Dict]]  # Input to be processed
     has_image: bool  # Whether the current input contains an image
     image_type: Optional[str]  # Type of medical image if present
     output: Optional[str]  # Final output to user
     needs_human_validation: bool  # Whether human validation is required
+    validation_id: Optional[str]
+    result_image_path: Optional[str]
     retrieval_confidence: float  # Confidence in retrieval (for RAG agent)
     bypass_routing: bool  # Flag to bypass agent routing for guardrails
     insufficient_info: bool  # Flag indicating RAG response has insufficient information
+    needs_rag_fallback: bool
+    user_id: str
+    conversation_id: str
+    thread_id: str
+    next_route: Optional[str]
 
 
 class AgentDecision(TypedDict):
@@ -105,6 +111,9 @@ class AgentDecision(TypedDict):
 
 def create_agent_graph():
     """Create and configure the LangGraph for agent orchestration."""
+    global _compiled_graph
+    if _compiled_graph is not None:
+        return _compiled_graph
 
     # Initialize guardrails with the same LLM used elsewhere
     guardrails = LocalGuardrails(config.rag.llm)
@@ -219,13 +228,15 @@ def create_agent_graph():
         updated_state = {
             **state,
             "agent_name": decision["agent"],
+            "selected_agent": decision["agent"],
+            "decision_confidence": float(decision.get("confidence", 0.0)),
         }
         
         # Route based on agent name and confidence
         if decision["confidence"] < AgentConfig.CONFIDENCE_THRESHOLD:
-            return {"agent_state": updated_state, "next": "needs_validation"}
+            return {**updated_state, "needs_rag_fallback": True, "next_route": "RAG_AGENT"}
         
-        return {"agent_state": updated_state, "next": decision["agent"]}
+        return {**updated_state, "next_route": decision["agent"]}
 
     # Define agent execution functions (these will be implemented in their respective modules)
     def run_conversation_agent(state: AgentState) -> AgentState:
@@ -318,7 +329,8 @@ def create_agent_graph():
         return {
             **state,
             "output": response,
-            "agent_name": "CONVERSATION_AGENT"
+            "agent_name": "CONVERSATION_AGENT",
+            "selected_agent": "CONVERSATION_AGENT",
         }
     
     def run_rag_agent(state: AgentState) -> AgentState:
@@ -392,7 +404,9 @@ def create_agent_graph():
             "needs_human_validation": False,  # Assuming no validation needed for RAG responses
             "retrieval_confidence": retrieval_confidence,
             "agent_name": "RAG_AGENT",
-            "insufficient_info": insufficient_info
+            "selected_agent": "RAG_AGENT",
+            "insufficient_info": insufficient_info,
+            "needs_rag_fallback": insufficient_info or retrieval_confidence < config.rag.min_retrieval_confidence,
         }
 
     # Web Search Processor Node
@@ -430,7 +444,8 @@ def create_agent_graph():
             **state,
             # "output": "This would be handled by the web search agent, finding the latest information.",
             "output": processed_response,
-            "agent_name": involved_agents
+            "agent_name": involved_agents,
+            "selected_agent": "WEB_SEARCH_PROCESSOR_AGENT",
         }
 
     # Define Routing Logic
@@ -452,13 +467,19 @@ def create_agent_graph():
 
         print(f"Selected agent: BRAIN_TUMOR_AGENT")
 
-        response = AIMessage(content="This would be handled by the brain tumor agent, analyzing the MRI image.")
+        response = AIMessage(
+            content=(
+                "Brain MRI analysis is not currently available in this deployment. "
+                "Please do not use this response as a diagnosis; consult a healthcare professional."
+            )
+        )
 
         return {
             **state,
             "output": response,
-            "needs_human_validation": True,  # Medical diagnosis always needs validation
-            "agent_name": "BRAIN_TUMOR_AGENT"
+            "needs_human_validation": False,
+            "agent_name": "BRAIN_TUMOR_AGENT",
+            "selected_agent": "BRAIN_TUMOR_AGENT",
         }
     
     def run_chest_xray_agent(state: AgentState) -> AgentState:
@@ -485,7 +506,8 @@ def create_agent_graph():
             **state,
             "output": response,
             "needs_human_validation": True,  # Medical diagnosis always needs validation
-            "agent_name": "CHEST_XRAY_AGENT"
+            "agent_name": "CHEST_XRAY_AGENT",
+            "selected_agent": "CHEST_XRAY_AGENT",
         }
     
     def run_skin_lesion_agent(state: AgentState) -> AgentState:
@@ -510,7 +532,9 @@ def create_agent_graph():
             **state,
             "output": response,
             "needs_human_validation": True,  # Medical diagnosis always needs validation
-            "agent_name": "SKIN_LESION_AGENT"
+            "agent_name": "SKIN_LESION_AGENT",
+            "selected_agent": "SKIN_LESION_AGENT",
+            "result_image_path": AgentConfig.image_analyzer.skin_lesion_segmentation_output_path,
         }
     
     def handle_human_validation(state: AgentState) -> Dict:
@@ -529,10 +553,20 @@ def create_agent_graph():
         # Create an AI message with the validation prompt
         validation_message = AIMessage(content=validation_prompt)
 
+        record = validation_store.create(
+            user_id=state["user_id"],
+            conversation_id=state["conversation_id"],
+            thread_id=state["thread_id"],
+            agent_name=str(state["agent_name"]),
+            original_output=state["output"].content,
+            result_image_path=state.get("result_image_path"),
+        )
+
         return {
             **state,
             "output": validation_message,
-            "agent_name": f"{state['agent_name']}, HUMAN_VALIDATION"
+            "agent_name": f"{state['agent_name']}, HUMAN_VALIDATION",
+            "validation_id": record.validation_id,
         }
 
     # Check output through guardrails
@@ -628,7 +662,7 @@ def create_agent_graph():
     # Connect decision router to agents
     workflow.add_conditional_edges(
         "route_to_agent",
-        lambda x: x["next"],
+        lambda x: x["next_route"],
         {
             "CONVERSATION_AGENT": "CONVERSATION_AGENT",
             "RAG_AGENT": "RAG_AGENT",
@@ -636,7 +670,8 @@ def create_agent_graph():
             "BRAIN_TUMOR_AGENT": "BRAIN_TUMOR_AGENT",
             "CHEST_XRAY_AGENT": "CHEST_XRAY_AGENT",
             "SKIN_LESION_AGENT": "SKIN_LESION_AGENT",
-            "needs_validation": "RAG_AGENT"  # Default to RAG if confidence is low
+            # Low decision confidence is an explicit RAG fallback, not human
+            # validation.  Human validation is only for image outputs.
         }
     )
     
@@ -664,7 +699,8 @@ def create_agent_graph():
     # workflow.add_edge("human_validation", END)
     
     # Compile the graph
-    return workflow.compile(checkpointer=memory)
+    _compiled_graph = workflow.compile(checkpointer=get_checkpointer())
+    return _compiled_graph
 
 
 def init_agent_state() -> AgentState:
@@ -672,18 +708,33 @@ def init_agent_state() -> AgentState:
     return {
         "messages": [],
         "agent_name": None,
+        "selected_agent": None,
+        "decision_confidence": 0.0,
         "current_input": None,
         "has_image": False,
         "image_type": None,
         "output": None,
         "needs_human_validation": False,
+        "validation_id": None,
+        "result_image_path": None,
         "retrieval_confidence": 0.0,
         "bypass_routing": False,
-        "insufficient_info": False
+        "insufficient_info": False,
+        "needs_rag_fallback": False,
+        "user_id": "",
+        "conversation_id": "",
+        "thread_id": "",
+        "next_route": None,
     }
 
 
-def process_query(query: Union[str, Dict], conversation_history: List[BaseMessage] = None) -> str:
+def process_query(
+    query: Union[str, Dict],
+    conversation_history: List[BaseMessage] = None,
+    *,
+    user_id: str = "anonymous",
+    conversation_id: str = "default",
+) -> AgentState:
     """
     Process a user query through the agent decision system.
     
@@ -705,6 +756,9 @@ def process_query(query: Union[str, Dict], conversation_history: List[BaseMessag
     
     # Initialize state
     state = init_agent_state()
+    state["user_id"] = user_id
+    state["conversation_id"] = conversation_id
+    state["thread_id"] = f"{user_id}:{conversation_id}"
     # if conversation_history:
     #     state["messages"] = conversation_history
     
@@ -717,8 +771,10 @@ def process_query(query: Union[str, Dict], conversation_history: List[BaseMessag
     
     state["messages"] = [HumanMessage(content=query)]
 
-    # result = graph.invoke(state, thread_config)
-    result = graph.invoke(state, thread_config)
+    result = graph.invoke(
+        state,
+        {"configurable": {"thread_id": state["thread_id"]}},
+    )
     # print("######### DEBUG 4:", result)
     # state["messages"] = [result["messages"][-1].content]
 

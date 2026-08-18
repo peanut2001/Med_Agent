@@ -22,7 +22,8 @@ function createAssistantMessage(data: AgentResponse, imagePreview?: string | nul
     content: data.response || "",
     imagePreview: data.result_image && data.agent === "SKIN_LESION_AGENT, HUMAN_VALIDATION" ? imagePreview : null,
     resultImage: data.result_image || null,
-    requiresValidation: needsHumanValidation(data)
+    requiresValidation: needsHumanValidation(data),
+    validationId: data.validation_id || null
   };
 }
 
@@ -42,6 +43,7 @@ export default function App() {
   const [imageDraft, setImageDraft] = useState<ImageDraft | null>(null);
   const [busy, setBusy] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [conversationId, setConversationId] = useState<string | undefined>();
   const objectUrlsRef = useRef<Set<string>>(new Set());
 
   const recorder = useSpeechRecorder({
@@ -125,7 +127,10 @@ export default function App() {
     setBusy(true);
 
     try {
-      const data = draft ? await uploadImage(messageText, draft.file) : await sendChat(messageText);
+      const data = draft
+        ? await uploadImage(messageText, draft.file, conversationId)
+        : await sendChat(messageText, conversationId);
+      if (data.conversation_id) setConversationId(data.conversation_id);
       const assistantMessage = createAssistantMessage(data, draft?.previewUrl || null);
 
       setMessages((current) => current.filter((item) => item.id !== "thinking").concat(assistantMessage));
@@ -151,7 +156,11 @@ export default function App() {
     setMessages((current) => [...current, waitingMessage]);
 
     try {
-      const result = await validateMedicalOutput(validation, comments);
+      const source = [...messages].reverse().find((item) => item.requiresValidation);
+      if (!source) throw new Error("找不到待审核的诊断结果，请刷新后重试。");
+      const validationId = source.validationId;
+      if (!validationId) throw new Error("审核请求已失效，请重新上传图像。");
+      const result = await validateMedicalOutput(validation, comments, validationId, conversationId);
       const content = [result.message, result.response].filter(Boolean).join("\n\n");
       const validationMessage: ChatMessage = {
         id: createId("validated"),
@@ -161,7 +170,10 @@ export default function App() {
         content
       };
 
-      setMessages((current) => current.filter((item) => item.id !== waitingMessage.id).concat(validationMessage));
+      setMessages((current) => current
+        .filter((item) => item.id !== waitingMessage.id)
+        .map((item) => item.validationId === validationId ? { ...item, requiresValidation: false } : item)
+        .concat(validationMessage));
     } catch (error) {
       console.error("Validation submission failed:", error);
       const message = error instanceof Error ? error.message : "验证提交失败，请重试。";

@@ -5,6 +5,9 @@ export type AgentResponse = {
   result_image?: string;
   detail?: string;
   error?: string;
+  conversation_id?: string;
+  validation_id?: string | null;
+  requires_validation?: boolean;
 };
 
 export type ValidationResponse = {
@@ -14,6 +17,8 @@ export type ValidationResponse = {
   response?: string;
   detail?: string;
   error?: string;
+  conversation_id?: string;
+  validation_id?: string;
 };
 
 export type ChatMessage = {
@@ -25,6 +30,7 @@ export type ChatMessage = {
   imagePreview?: string | null;
   resultImage?: string | null;
   requiresValidation?: boolean;
+  validationId?: string | null;
 };
 
 export type ImageDraft = {
