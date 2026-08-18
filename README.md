@@ -17,6 +17,7 @@
 - [安装与配置](#安装与配置)
   - [方式一：使用 Docker](#方式一使用-docker)
   - [方式二：手动安装](#方式二手动安装)
+- [打包与发行版](#打包与发行版)
 - [使用方法](#使用方法)
 
 ---
@@ -165,8 +166,8 @@ QDRANT_API_KEY=
 #### 1. 克隆仓库
 
 ```bash
-git clone https://github.com/souvikmajumder26/Multi-Agent-Medical-Assistant.git
-cd Multi-Agent-Medical-Assistant
+git clone https://github.com/peanut2001/Med_Agent.git
+cd Med_Agent
 ```
 
 #### 2. 构建镜像
@@ -182,6 +183,32 @@ docker run -d --name medical-assistant-app -p 8000:8000 --env-file .env medical-
 ```
 
 应用地址：[http://localhost:8000](http://localhost:8000)
+
+### 打包与发行版
+
+项目版本号维护在根目录的 `VERSION` 文件中。推送 `v*` 标签后，GitHub Actions 会自动：
+
+1. 构建并发布 `linux/amd64` Docker 镜像到 GHCR；
+2. 创建对应的 GitHub Release；
+3. 上传版本清单 artifact。
+
+当前镜像地址：
+
+```text
+ghcr.io/peanut2001/med-agent:<version>
+```
+
+发布新版本：
+
+```bash
+Set-Content VERSION "0.1.1"
+git add VERSION
+git commit -m "release: v0.1.1"
+git tag v0.1.1
+git push origin main --tags
+```
+
+也可以在 GitHub Actions 中手动运行 `Med Agent Release`，输入已有的版本标签。
 
 #### 4. 导入数据到向量数据库
 
