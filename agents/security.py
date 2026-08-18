@@ -39,9 +39,13 @@ def _decode_bearer(token: str) -> CurrentUser:
 
     jwks_url = os.getenv("AUTH_JWKS_URL")
     secret = os.getenv("AUTH_JWT_SECRET")
+    issuer = os.getenv("AUTH_JWT_ISSUER")
+    audience = os.getenv("AUTH_JWT_AUDIENCE")
+    if _auth_required() and (not issuer or not audience):
+        raise HTTPException(status_code=503, detail="AUTH_JWT_ISSUER and AUTH_JWT_AUDIENCE are required")
     default_algorithms = "RS256" if jwks_url else "HS256"
     algorithms = [item.strip() for item in os.getenv("AUTH_JWT_ALGORITHMS", default_algorithms).split(",") if item.strip()]
-    options = {"verify_aud": bool(os.getenv("AUTH_JWT_AUDIENCE"))}
+    options = {"verify_aud": bool(audience)}
     kwargs = {"algorithms": algorithms, "options": options}
     if jwks_url:
         try:
@@ -61,8 +65,8 @@ def _decode_bearer(token: str) -> CurrentUser:
         claims = jwt.decode(
             token,
             key,
-            issuer=os.getenv("AUTH_JWT_ISSUER") or None,
-            audience=os.getenv("AUTH_JWT_AUDIENCE") or None,
+            issuer=issuer or None,
+            audience=audience or None,
             **kwargs,
         )
     except Exception as exc:
