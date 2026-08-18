@@ -115,6 +115,12 @@ def health_check():
     """Health check endpoint for Docker health checks"""
     return {"status": "healthy"}
 
+
+@app.get("/auth/me")
+def auth_me(current_user: CurrentUser = Depends(get_current_user)):
+    """Validate the upstream OAuth/OIDC access token and expose its subject."""
+    return {"authenticated": True, "user_id": current_user.user_id}
+
 @app.post("/chat")
 def chat(
     request: QueryRequest, 

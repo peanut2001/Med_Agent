@@ -12,6 +12,9 @@ from typing import Optional
 
 from fastapi import Header, HTTPException, Request, status
 
+_jwks_client = None
+_jwks_client_url = None
+
 
 @dataclass(frozen=True)
 class CurrentUser:
@@ -34,16 +37,26 @@ def _decode_bearer(token: str) -> CurrentUser:
     except ImportError as exc:
         raise HTTPException(status_code=503, detail="JWT validation is not configured") from exc
 
+    jwks_url = os.getenv("AUTH_JWKS_URL")
     secret = os.getenv("AUTH_JWT_SECRET")
-    algorithms = [item.strip() for item in os.getenv("AUTH_JWT_ALGORITHMS", "HS256").split(",") if item.strip()]
+    default_algorithms = "RS256" if jwks_url else "HS256"
+    algorithms = [item.strip() for item in os.getenv("AUTH_JWT_ALGORITHMS", default_algorithms).split(",") if item.strip()]
     options = {"verify_aud": bool(os.getenv("AUTH_JWT_AUDIENCE"))}
     kwargs = {"algorithms": algorithms, "options": options}
-    if secret:
+    if jwks_url:
+        try:
+            from jwt import PyJWKClient
+            global _jwks_client, _jwks_client_url
+            if _jwks_client is None or _jwks_client_url != jwks_url:
+                _jwks_client = PyJWKClient(jwks_url, cache_keys=True)
+                _jwks_client_url = jwks_url
+            key = _jwks_client.get_signing_key_from_jwt(token).key
+        except Exception as exc:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unable to verify signing key") from exc
+    elif secret:
         key = secret
     else:
-        # RS256/JWKS validation belongs at the gateway unless a shared secret is
-        # explicitly supplied.  Never accept an unsigned token here.
-        raise HTTPException(status_code=503, detail="AUTH_JWT_SECRET is not configured")
+        raise HTTPException(status_code=503, detail="Configure AUTH_JWKS_URL or AUTH_JWT_SECRET")
     try:
         claims = jwt.decode(
             token,
@@ -87,4 +100,3 @@ def resolve_conversation_id(request: Request, requested: Optional[str] = None) -
     layer; new IDs are generated server-side.
     """
     return requested or request.cookies.get("conversation_id") or os.urandom(16).hex()
-
