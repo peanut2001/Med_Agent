@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { sendChat, uploadImage, validateMedicalOutput } from "./api/client";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { getCurrentUser, loginLocal, logoutLocal, sendChat, uploadImage, validateMedicalOutput } from "./api/client";
 import { ChatPanel } from "./components/ChatPanel";
 import { Sidebar } from "./components/Sidebar";
 import { useSpeechRecorder } from "./hooks/useSpeechRecorder";
@@ -44,6 +44,12 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [conversationId, setConversationId] = useState<string | undefined>();
+  const [authChecked, setAuthChecked] = useState(false);
+  const [currentUser, setCurrentUser] = useState<string | null>(null);
+  const [loginUsername, setLoginUsername] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+  const [loginError, setLoginError] = useState<string | null>(null);
+  const [loginBusy, setLoginBusy] = useState(false);
   const objectUrlsRef = useRef<Set<string>>(new Set());
 
   const recorder = useSpeechRecorder({
@@ -70,11 +76,40 @@ export default function App() {
   );
 
   useEffect(() => {
+    void getCurrentUser()
+      .then((data) => setCurrentUser(data.user_id))
+      .catch(() => setCurrentUser(null))
+      .finally(() => setAuthChecked(true));
+  }, []);
+
+  useEffect(() => {
     return () => {
       objectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
       objectUrlsRef.current.clear();
     };
   }, []);
+
+  async function handleLogin(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setLoginBusy(true);
+    setLoginError(null);
+    try {
+      const data = await loginLocal(loginUsername.trim(), loginPassword);
+      setCurrentUser(data.user_id);
+      setLoginPassword("");
+    } catch (error) {
+      setLoginError(error instanceof Error ? error.message : "登录失败，请检查用户名和密码。");
+    } finally {
+      setLoginBusy(false);
+    }
+  }
+
+  async function handleLogout() {
+    await logoutLocal();
+    setCurrentUser(null);
+    setConversationId(undefined);
+    setMessages([]);
+  }
 
   function handleImageChange(file: File) {
     if (imageDraft?.previewUrl) {
@@ -181,9 +216,35 @@ export default function App() {
     }
   }
 
+  if (!authChecked) {
+    return <div className="auth-screen">正在检查登录状态…</div>;
+  }
+
+  if (!currentUser) {
+    return (
+      <main className="auth-screen">
+        <form className="auth-card" onSubmit={(event) => void handleLogin(event)}>
+          <div className="welcome-kicker">MED AGENT</div>
+          <h1>登录医疗助手</h1>
+          <p>请输入本地测试账号继续使用。</p>
+          <label>
+            用户名
+            <input value={loginUsername} onChange={(event) => setLoginUsername(event.target.value)} autoComplete="username" required />
+          </label>
+          <label>
+            密码
+            <input type="password" value={loginPassword} onChange={(event) => setLoginPassword(event.target.value)} autoComplete="current-password" required />
+          </label>
+          {loginError && <div className="auth-error">{loginError}</div>}
+          <button type="submit" disabled={loginBusy}>{loginBusy ? "登录中…" : "登录"}</button>
+        </form>
+      </main>
+    );
+  }
+
   return (
     <div className="app-shell">
-      <Sidebar onClear={handleClear} />
+      <Sidebar onClear={handleClear} onLogout={() => void handleLogout()} currentUser={currentUser} />
       <ChatPanel
         messages={messages}
         inputValue={inputValue}

@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from fastapi import Header, HTTPException, Request, status
+from agents.local_auth import local_auth_store
 
 _jwks_client = None
 _jwks_client_url = None
@@ -24,6 +25,10 @@ class CurrentUser:
 
 def _auth_required() -> bool:
     return os.getenv("AUTH_REQUIRED", "true").lower() in {"1", "true", "yes", "on"}
+
+
+def _auth_mode() -> str:
+    return os.getenv("AUTH_MODE", "local").lower()
 
 
 def _decode_bearer(token: str) -> CurrentUser:
@@ -87,10 +92,15 @@ def get_current_user(
     ``X-User-ID`` is only accepted when ``AUTH_REQUIRED=false`` and should be
     used exclusively by local development or a trusted test harness.
     """
-    if not _auth_required() and x_user_id:
+    if _auth_mode() == "disabled" and not _auth_required() and x_user_id:
         return CurrentUser(user_id=x_user_id, claims={"sub": x_user_id, "dev": True})
+    if _auth_mode() == "local":
+        user_id = local_auth_store.get_user_id(request.cookies.get("med_agent_session"))
+        if user_id:
+            return CurrentUser(user_id=user_id, claims={"sub": user_id, "auth_mode": "local"})
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Local login required")
     if not authorization or not authorization.lower().startswith("bearer "):
-        if not _auth_required() and x_user_id:
+        if _auth_mode() == "disabled" and not _auth_required() and x_user_id:
             return CurrentUser(user_id=x_user_id, claims={"sub": x_user_id, "dev": True})
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
     return _decode_bearer(authorization.split(" ", 1)[1].strip())

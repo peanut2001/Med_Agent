@@ -13,6 +13,25 @@ async function readJson<T>(response: Response): Promise<T> {
   return data;
 }
 
+export async function getCurrentUser(): Promise<{ authenticated: boolean; user_id: string }> {
+  const response = await fetch("/auth/me", { credentials: "include" });
+  return readJson<{ authenticated: boolean; user_id: string }>(response);
+}
+
+export async function loginLocal(username: string, password: string): Promise<{ authenticated: boolean; user_id: string }> {
+  const response = await fetch("/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ username, password })
+  });
+  return readJson<{ authenticated: boolean; user_id: string }>(response);
+}
+
+export async function logoutLocal(): Promise<void> {
+  await fetch("/auth/logout", { method: "POST", credentials: "include" });
+}
+
 export async function sendChat(query: string, conversationId?: string): Promise<AgentResponse> {
   const response = await fetch("/chat", {
     method: "POST",

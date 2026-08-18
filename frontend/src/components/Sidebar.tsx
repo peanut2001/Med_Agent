@@ -11,6 +11,8 @@
 
 type SidebarProps = {
   onClear: () => void;
+  onLogout: () => void;
+  currentUser: string;
 };
 
 const capabilities = [
@@ -31,7 +33,7 @@ const capabilities = [
   }
 ];
 
-export function Sidebar({ onClear }: SidebarProps) {
+export function Sidebar({ onClear, onLogout, currentUser }: SidebarProps) {
   return (
     <aside className="sidebar" aria-label="应用导航">
       <div className="brand-row">
@@ -82,6 +84,7 @@ export function Sidebar({ onClear }: SidebarProps) {
       </section>
 
       <div className="sidebar-footer">
+        <div className="sidebar-user">已登录：{currentUser}</div>
         <div className="sidebar-meta">
           <span><BrainCircuit size={15} /> 多智能体协同</span>
           <span><Sparkles size={15} /> 隐私会话</span>
@@ -89,6 +92,9 @@ export function Sidebar({ onClear }: SidebarProps) {
         <button type="button" className="clear-button" onClick={onClear} aria-label="清空当前对话">
           <RotateCcw size={17} aria-hidden="true" />
           <span>清空对话</span>
+        </button>
+        <button type="button" className="clear-button" onClick={onLogout} aria-label="退出登录">
+          <span>退出登录</span>
         </button>
       </div>
     </aside>

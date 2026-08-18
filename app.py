@@ -24,6 +24,7 @@ from config import Config
 from agents.agent_decision import process_query
 from agents.security import CurrentUser, get_current_user, resolve_conversation_id
 from agents.validation_store import validation_store
+from agents.local_auth import local_auth_store
 
 # Load configuration
 config = Config()
@@ -103,6 +104,11 @@ class SpeechRequest(BaseModel):
     text: str
     voice_id: str = "EXAMPLE_VOICE_ID"  # Default voice ID
 
+
+class LocalLoginRequest(BaseModel):
+    username: str
+    password: str
+
 @app.get("/")
 async def index():
     """Serve the React frontend built by Vite."""
@@ -120,6 +126,34 @@ def health_check():
 def auth_me(current_user: CurrentUser = Depends(get_current_user)):
     """Validate the upstream OAuth/OIDC access token and expose its subject."""
     return {"authenticated": True, "user_id": current_user.user_id}
+
+
+@app.post("/auth/login")
+def auth_login(request: LocalLoginRequest, response: Response):
+    """Local-only login for small trusted test deployments."""
+    if os.getenv("AUTH_MODE", "local").lower() != "local":
+        raise HTTPException(status_code=404, detail="Local authentication is disabled")
+    user_id = local_auth_store.authenticate(request.username, request.password)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+    session_id = local_auth_store.create_session(user_id)
+    secure = os.getenv("COOKIE_SECURE", "false").lower() in {"1", "true", "yes", "on"}
+    response.set_cookie(
+        key="med_agent_session",
+        value=session_id,
+        httponly=True,
+        secure=secure,
+        samesite="lax",
+        max_age=int(os.getenv("LOCAL_AUTH_SESSION_TTL", str(12 * 3600))),
+    )
+    return {"authenticated": True, "user_id": user_id}
+
+
+@app.post("/auth/logout")
+def auth_logout(request: Request, response: Response):
+    local_auth_store.revoke_session(request.cookies.get("med_agent_session"))
+    response.delete_cookie("med_agent_session")
+    return {"authenticated": False}
 
 @app.post("/chat")
 def chat(
