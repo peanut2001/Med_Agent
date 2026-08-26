@@ -1,4 +1,4 @@
-import type { AgentResponse, ValidationResponse } from "../types";
+import type { AgentResponse, ExecutionTrace, ValidationResponse } from "../types";
 
 const DEFAULT_VOICE_ID = "21m00Tcm4TlvDq8ikWAM";
 
@@ -42,7 +42,24 @@ export async function logoutLocal(): Promise<void> {
   await fetch("/auth/logout", { method: "POST", credentials: "include" });
 }
 
-export async function sendChat(query: string, conversationId?: string): Promise<AgentResponse> {
+export async function createExecutionTrace(conversationId?: string): Promise<ExecutionTrace> {
+  const response = await fetch("/traces", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ conversation_id: conversationId })
+  });
+  return readJson<ExecutionTrace>(response);
+}
+
+export async function getExecutionTrace(traceId: string): Promise<ExecutionTrace> {
+  const response = await fetch(`/traces/${encodeURIComponent(traceId)}`, {
+    credentials: "include"
+  });
+  return readJson<ExecutionTrace>(response);
+}
+
+export async function sendChat(query: string, conversationId?: string, traceId?: string): Promise<AgentResponse> {
   const response = await fetch("/chat", {
     method: "POST",
     headers: {
@@ -51,7 +68,8 @@ export async function sendChat(query: string, conversationId?: string): Promise<
     body: JSON.stringify({
       query,
       conversation_history: [],
-      conversation_id: conversationId
+      conversation_id: conversationId,
+      trace_id: traceId
     }),
     credentials: "include"
   });
@@ -59,11 +77,12 @@ export async function sendChat(query: string, conversationId?: string): Promise<
   return readJson<AgentResponse>(response);
 }
 
-export async function uploadImage(text: string, image: File, conversationId?: string): Promise<AgentResponse> {
+export async function uploadImage(text: string, image: File, conversationId?: string, traceId?: string): Promise<AgentResponse> {
   const formData = new FormData();
   formData.append("text", text);
   formData.append("image", image);
   if (conversationId) formData.append("conversation_id", conversationId);
+  if (traceId) formData.append("trace_id", traceId);
 
   const response = await fetch("/upload", {
     method: "POST",

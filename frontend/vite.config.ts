@@ -15,6 +15,7 @@ export default defineConfig(({ mode }) => {
         "/upload": backendTarget,
         "/validate": backendTarget,
         "/validations": backendTarget,
+        "/traces": backendTarget,
         "/auth": backendTarget,
         "/transcribe": backendTarget,
         "/generate-speech": backendTarget,

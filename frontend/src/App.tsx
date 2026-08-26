@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { getCurrentUser, loginLocal, registerLocal, logoutLocal, sendChat, uploadImage, validateMedicalOutput } from "./api/client";
+import { createExecutionTrace, getCurrentUser, getExecutionTrace, loginLocal, registerLocal, logoutLocal, sendChat, uploadImage, validateMedicalOutput } from "./api/client";
 import { ChatPanel } from "./components/ChatPanel";
+import { ExecutionInspector } from "./components/ExecutionInspector";
 import { Sidebar } from "./components/Sidebar";
 import { useSpeechRecorder } from "./hooks/useSpeechRecorder";
-import type { AgentResponse, ChatMessage, ImageDraft } from "./types";
+import type { AgentResponse, ChatMessage, ExecutionTrace, ImageDraft, TraceRun } from "./types";
 
 function createId(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -51,7 +52,22 @@ export default function App() {
   const [loginError, setLoginError] = useState<string | null>(null);
   const [loginBusy, setLoginBusy] = useState(false);
   const [authMode, setAuthMode] = useState<"login" | "register">("login");
+  const [traceRuns, setTraceRuns] = useState<TraceRun[]>([]);
+  const [selectedTraceId, setSelectedTraceId] = useState<string | null>(null);
   const objectUrlsRef = useRef<Set<string>>(new Set());
+
+  function upsertTrace(trace: ExecutionTrace, queryLabel?: string) {
+    setTraceRuns((current) => {
+      const existing = current.find((item) => item.trace_id === trace.trace_id);
+      const next: TraceRun = {
+        ...trace,
+        queryLabel: queryLabel || existing?.queryLabel || "本次智能体调用"
+      };
+      return existing
+        ? current.map((item) => item.trace_id === trace.trace_id ? next : item)
+        : [...current, next];
+    });
+  }
 
   const recorder = useSpeechRecorder({
     onTranscript: (transcript) => {
@@ -112,6 +128,8 @@ export default function App() {
     setCurrentUser(null);
     setConversationId(undefined);
     setMessages([]);
+    setTraceRuns([]);
+    setSelectedTraceId(null);
   }
 
   function handleImageChange(file: File) {
@@ -141,6 +159,8 @@ export default function App() {
     setImageDraft(null);
     setInputValue("");
     setMessages([]);
+    setTraceRuns([]);
+    setSelectedTraceId(null);
     setStatusMessage(null);
   }
 
@@ -164,20 +184,57 @@ export default function App() {
     setInputValue("");
     setBusy(true);
 
+    let traceId: string | null = null;
+    let polling = false;
+    let pollingPromise: Promise<void> | null = null;
+    const queryLabel = messageText || "上传影像并开始分析";
+
     try {
+      const initialTrace = await createExecutionTrace(conversationId);
+      traceId = initialTrace.trace_id;
+      const requestConversationId = initialTrace.conversation_id;
+      setConversationId(requestConversationId);
+      setSelectedTraceId(traceId);
+      upsertTrace(initialTrace, queryLabel);
+
+      polling = true;
+      pollingPromise = (async () => {
+        while (polling) {
+          await new Promise((resolve) => window.setTimeout(resolve, 300));
+          if (!polling || !traceId) break;
+          try {
+            const liveTrace = await getExecutionTrace(traceId);
+            upsertTrace(liveTrace, queryLabel);
+            if (liveTrace.status === "completed" || liveTrace.status === "failed") break;
+          } catch {
+            break;
+          }
+        }
+      })();
+
       const data = draft
-        ? await uploadImage(messageText, draft.file, conversationId)
-        : await sendChat(messageText, conversationId);
+        ? await uploadImage(messageText, draft.file, requestConversationId, traceId)
+        : await sendChat(messageText, requestConversationId, traceId);
       if (data.conversation_id) setConversationId(data.conversation_id);
+      if (data.execution_trace) upsertTrace(data.execution_trace, queryLabel);
       const assistantMessage = createAssistantMessage(data, draft?.previewUrl || null);
 
       setMessages((current) => current.filter((item) => item.id !== "thinking").concat(assistantMessage));
       setImageDraft(null);
     } catch (error) {
       console.error("Request failed:", error);
+      if (traceId) {
+        try {
+          upsertTrace(await getExecutionTrace(traceId), queryLabel);
+        } catch {
+          // Keep the last successfully polled snapshot.
+        }
+      }
       const message = error instanceof Error ? error.message : "抱歉，处理您的请求时出错，请重试。";
       setMessages((current) => current.filter((item) => item.id !== "thinking").concat(createSystemMessage(message)));
     } finally {
+      polling = false;
+      if (pollingPromise) await pollingPromise;
       setBusy(false);
     }
   }
@@ -264,6 +321,13 @@ export default function App() {
         onSubmit={() => void handleSubmit()}
         onVoiceToggle={recorder.toggleRecording}
         onValidate={handleValidation}
+      />
+      <ExecutionInspector
+        traces={traceRuns}
+        selectedTraceId={selectedTraceId}
+        busy={busy}
+        conversationId={conversationId}
+        onSelect={setSelectedTraceId}
       />
     </div>
   );

@@ -51,6 +51,8 @@ The default concurrency settings are:
 MAX_CONCURRENT_AGENT_REQUESTS=4
 MAX_CONCURRENT_IMAGE_INFERENCES=1
 PRIVATE_ARTIFACT_TTL_SECONDS=86400
+EXECUTION_TRACE_TTL_SECONDS=3600
+EXECUTION_TRACE_MAX_RECORDS=1000
 ```
 
 Requests for the same `user_id + conversation_id` are serialized to protect
@@ -68,3 +70,13 @@ are removed after the configured TTL.
 Without `CHECKPOINT_DATABASE_URL`, checkpoint state remains process-local and
 is lost on restart. This mode supports one Uvicorn process only. Configure
 PostgreSQL before adding workers or application containers.
+
+## Execution trace visibility
+
+The frontend creates an authenticated trace with `POST /traces` before each
+agent request and polls `GET /traces/{trace_id}` while the graph is running.
+Trace records are scoped to the authenticated user and contain only node IDs,
+status, routing metadata, timestamps, and durations. User prompts, retrieved
+medical documents, model outputs, tokens, and credentials are not stored in
+the trace repository. The in-memory trace repository is bounded by TTL and
+record count and is intentionally limited to the single-process deployment.

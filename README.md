@@ -75,6 +75,7 @@
 - **语音交互** — Eleven Labs API 驱动的语音转文字 / 文字转语音
 - **专家监督系统** — 医学专业人员在最终输出前进行人机协同验证
 - **输入与输出护栏** — 过滤有害或误导性内容，确保安全可靠的医学响应
+- **智能体执行轨迹** — 三栏界面实时展示本次调用触发的 LangGraph 节点、路由状态与耗时
 - **直观的用户界面** — 为技术基础较少的医疗专业人员设计
 
 > [!NOTE]
@@ -158,6 +159,8 @@ QDRANT_API_KEY=
 MAX_CONCURRENT_AGENT_REQUESTS=4
 MAX_CONCURRENT_IMAGE_INFERENCES=1
 PRIVATE_ARTIFACT_TTL_SECONDS=86400
+EXECUTION_TRACE_TTL_SECONDS=3600
+EXECUTION_TRACE_MAX_RECORDS=1000
 ```
 
 ---

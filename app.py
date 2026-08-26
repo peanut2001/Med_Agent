@@ -26,6 +26,7 @@ from agents.artifacts import (
     cleanup_expired_artifacts,
     resolve_private_artifact,
 )
+from agents.execution_trace import execution_trace_store
 from agents.security import CurrentUser, get_current_user, resolve_conversation_id
 from agents.validation_store import validation_store
 from agents.local_auth import local_auth_store
@@ -125,6 +126,11 @@ class QueryRequest(BaseModel):
     query: str
     conversation_history: List = []
     conversation_id: Optional[str] = None
+    trace_id: Optional[str] = None
+
+
+class TraceStartRequest(BaseModel):
+    conversation_id: Optional[str] = None
 
 class SpeechRequest(BaseModel):
     text: str
@@ -220,10 +226,44 @@ def _agent_response_payload(response_data: dict, conversation_id: str) -> dict:
         "conversation_id": conversation_id,
         "validation_id": validation_id,
         "requires_validation": bool(validation_id),
+        "execution_trace": response_data.get("execution_trace"),
     }
     if validation_id and response_data.get("result_image_path"):
         result["result_image"] = f"/validations/{validation_id}/image"
     return result
+
+
+@app.post("/traces")
+def create_execution_trace(
+    request: TraceStartRequest,
+    response: Response,
+    http_request: Request,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    conversation_id = resolve_conversation_id(http_request, request.conversation_id)
+    trace = execution_trace_store.create(
+        user_id=current_user.user_id, conversation_id=conversation_id
+    )
+    response.set_cookie(
+        key="conversation_id",
+        value=conversation_id,
+        httponly=True,
+        samesite="lax",
+    )
+    return trace
+
+
+@app.get("/traces/{trace_id}")
+def get_execution_trace(
+    trace_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    try:
+        return execution_trace_store.get_for_user(
+            trace_id, user_id=current_user.user_id
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Execution trace not found")
 
 @app.post("/chat")
 async def chat(
@@ -245,6 +285,7 @@ async def chat(
             request.query,
             user_id=current_user.user_id,
             conversation_id=conversation_id,
+            trace_id=request.trace_id,
         )
         
         # Set session cookie
@@ -252,6 +293,10 @@ async def chat(
         response.set_cookie(key="conversation_id", value=conversation_id, httponly=True, samesite="lax")
 
         return _agent_response_payload(response_data, conversation_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Execution trace not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail="Execution trace has already been used") from exc
     except Exception as e:
         import traceback
         traceback.print_exc()
@@ -264,12 +309,16 @@ async def upload_image(
     image: UploadFile = File(...), 
     text: str = Form(""),
     conversation_id: Optional[str] = Form(None),
+    trace_id: Optional[str] = Form(None),
     current_user: CurrentUser = Depends(get_current_user),
     session_id: Optional[str] = Cookie(None)
 ):
     """Process medical image uploads with optional text input."""
     # Validate file type
     if not allowed_file(image.filename):
+        execution_trace_store.fail_for_user(
+            trace_id, user_id=current_user.user_id
+        )
         return JSONResponse(
             status_code=400, 
             content={
@@ -282,6 +331,9 @@ async def upload_image(
     # Check file size before saving
     file_content = await image.read()
     if len(file_content) > config.api.max_image_upload_size * 1024 * 1024:  # Convert MB to bytes
+        execution_trace_store.fail_for_user(
+            trace_id, user_id=current_user.user_id
+        )
         return JSONResponse(
             status_code=413, 
             content={
@@ -307,6 +359,7 @@ async def upload_image(
             query,
             user_id=current_user.user_id,
             conversation_id=conversation_id,
+            trace_id=trace_id,
         )
 
         # Set session cookie
@@ -314,7 +367,14 @@ async def upload_image(
         response.set_cookie(key="conversation_id", value=conversation_id, httponly=True, samesite="lax")
 
         return _agent_response_payload(response_data, conversation_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Execution trace not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail="Execution trace has already been used") from exc
     except Exception as e:
+        execution_trace_store.fail_for_user(
+            trace_id, user_id=current_user.user_id
+        )
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         await run_in_threadpool(_safe_unlink, file_path)

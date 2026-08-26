@@ -111,3 +111,52 @@ def test_generated_speech_is_deleted_after_response(tmp_path, monkeypatch):
         assert list(tmp_path.iterdir()) == []
     finally:
         application.app.dependency_overrides.clear()
+
+
+def test_execution_trace_api_is_scoped_to_authenticated_user():
+    application.app.dependency_overrides[get_current_user] = lambda: CurrentUser(
+        user_id="user-a", claims={"sub": "user-a"}
+    )
+    try:
+        with TestClient(application.app) as client:
+            created = client.post(
+                "/traces", json={"conversation_id": "conversation-a"}
+            )
+            assert created.status_code == 200
+            trace = created.json()
+            assert trace["status"] == "queued"
+            assert trace["nodes"] == []
+
+            owned = client.get(f"/traces/{trace['trace_id']}")
+            assert owned.status_code == 200
+
+            application.app.dependency_overrides[get_current_user] = lambda: CurrentUser(
+                user_id="user-b", claims={"sub": "user-b"}
+            )
+            assert client.get(f"/traces/{trace['trace_id']}").status_code == 404
+    finally:
+        application.app.dependency_overrides.clear()
+
+
+def test_rejected_upload_marks_preflight_trace_failed():
+    application.app.dependency_overrides[get_current_user] = lambda: CurrentUser(
+        user_id="user-a", claims={"sub": "user-a"}
+    )
+    try:
+        with TestClient(application.app) as client:
+            trace = client.post(
+                "/traces", json={"conversation_id": "conversation-a"}
+            ).json()
+            rejected = client.post(
+                "/upload",
+                files={"image": ("notes.txt", b"not-an-image", "text/plain")},
+                data={
+                    "conversation_id": "conversation-a",
+                    "trace_id": trace["trace_id"],
+                },
+            )
+            assert rejected.status_code == 400
+            snapshot = client.get(f"/traces/{trace['trace_id']}").json()
+            assert snapshot["status"] == "failed"
+    finally:
+        application.app.dependency_overrides.clear()

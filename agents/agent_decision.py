@@ -24,6 +24,7 @@ from agents.guardrails.prompt_safety import redact_sensitive_output, sanitize_un
 from agents.checkpoint import get_checkpointer
 from agents.artifacts import produce_private_artifact
 from agents.concurrency import run_agent_request
+from agents.execution_trace import execution_trace_store, trace_context, traced_node
 from agents.validation_store import validation_store
 
 import cv2
@@ -112,6 +113,7 @@ class AgentState(MessagesState):
     user_id: str
     conversation_id: str
     thread_id: str
+    execution_trace_id: str
     next_route: Optional[str]
 
 
@@ -675,17 +677,17 @@ def _create_agent_graph_unlocked():
     workflow = StateGraph(AgentState)
     
     # Add nodes for each step
-    workflow.add_node("analyze_input", analyze_input)
-    workflow.add_node("route_to_agent", route_to_agent)
-    workflow.add_node("CONVERSATION_AGENT", run_conversation_agent)
-    workflow.add_node("RAG_AGENT", run_rag_agent)
-    workflow.add_node("WEB_SEARCH_PROCESSOR_AGENT", run_web_search_processor_agent)
-    workflow.add_node("BRAIN_TUMOR_AGENT", run_brain_tumor_agent)
-    workflow.add_node("CHEST_XRAY_AGENT", run_chest_xray_agent)
-    workflow.add_node("SKIN_LESION_AGENT", run_skin_lesion_agent)
-    workflow.add_node("check_validation", handle_human_validation)
-    workflow.add_node("human_validation", perform_human_validation)
-    workflow.add_node("apply_guardrails", apply_output_guardrails)
+    workflow.add_node("analyze_input", traced_node("analyze_input", analyze_input))
+    workflow.add_node("route_to_agent", traced_node("route_to_agent", route_to_agent))
+    workflow.add_node("CONVERSATION_AGENT", traced_node("CONVERSATION_AGENT", run_conversation_agent))
+    workflow.add_node("RAG_AGENT", traced_node("RAG_AGENT", run_rag_agent))
+    workflow.add_node("WEB_SEARCH_PROCESSOR_AGENT", traced_node("WEB_SEARCH_PROCESSOR_AGENT", run_web_search_processor_agent))
+    workflow.add_node("BRAIN_TUMOR_AGENT", traced_node("BRAIN_TUMOR_AGENT", run_brain_tumor_agent))
+    workflow.add_node("CHEST_XRAY_AGENT", traced_node("CHEST_XRAY_AGENT", run_chest_xray_agent))
+    workflow.add_node("SKIN_LESION_AGENT", traced_node("SKIN_LESION_AGENT", run_skin_lesion_agent))
+    workflow.add_node("check_validation", traced_node("check_validation", handle_human_validation))
+    workflow.add_node("human_validation", traced_node("human_validation", perform_human_validation))
+    workflow.add_node("apply_guardrails", traced_node("apply_guardrails", apply_output_guardrails))
     
     # Define the edges (workflow connections)
     workflow.set_entry_point("analyze_input")
@@ -765,6 +767,7 @@ def init_agent_state() -> AgentState:
         "user_id": "",
         "conversation_id": "",
         "thread_id": "",
+        "execution_trace_id": "",
         "next_route": None,
     }
 
@@ -775,6 +778,7 @@ def process_query(
     *,
     user_id: str = "anonymous",
     conversation_id: str = "default",
+    trace_id: Optional[str] = None,
 ) -> AgentState:
     """
     Process a user query through the agent decision system.
@@ -786,8 +790,20 @@ def process_query(
     Returns:
         Response from the appropriate agent
     """
+    if trace_id is None:
+        trace_id = execution_trace_store.create(
+            user_id=user_id, conversation_id=conversation_id
+        )["trace_id"]
+    execution_trace_store.activate(
+        trace_id, user_id=user_id, conversation_id=conversation_id
+    )
+
     # Initialize the graph
-    graph = create_agent_graph()
+    try:
+        graph = create_agent_graph()
+    except BaseException:
+        execution_trace_store.finish(trace_id, status="failed")
+        raise
 
     # # Save Graph Flowchart
     # image_bytes = graph.get_graph().draw_mermaid_png()
@@ -800,6 +816,7 @@ def process_query(
     state["user_id"] = user_id
     state["conversation_id"] = conversation_id
     state["thread_id"] = f"{user_id}:{conversation_id}"
+    state["execution_trace_id"] = trace_id
     # if conversation_history:
     #     state["messages"] = conversation_history
     
@@ -815,11 +832,20 @@ def process_query(
     # A conversation is strictly serialized so checkpoint state cannot be
     # updated concurrently. Different conversations can occupy separate
     # bounded request slots and execute in parallel.
-    result = run_agent_request(
-        state["thread_id"],
-        graph.invoke,
-        state,
-        {"configurable": {"thread_id": state["thread_id"]}},
+    try:
+        with trace_context(trace_id):
+            result = run_agent_request(
+                state["thread_id"],
+                graph.invoke,
+                state,
+                {"configurable": {"thread_id": state["thread_id"]}},
+            )
+    except BaseException:
+        execution_trace_store.finish(trace_id, status="failed")
+        raise
+    execution_trace_store.finish(trace_id, status="completed")
+    result["execution_trace"] = execution_trace_store.get_for_user(
+        trace_id, user_id=user_id
     )
     # print("######### DEBUG 4:", result)
     # state["messages"] = [result["messages"][-1].content]
