@@ -42,3 +42,29 @@ used when multiple people can reach the service.
 The frontend sends `conversation_id` and `validation_id` as part of the API
 contract. The backend always verifies ownership against the authenticated
 user before reading or resolving state.
+
+## Single-container concurrency
+
+The default concurrency settings are:
+
+```text
+MAX_CONCURRENT_AGENT_REQUESTS=4
+MAX_CONCURRENT_IMAGE_INFERENCES=1
+PRIVATE_ARTIFACT_TTL_SECONDS=86400
+```
+
+Requests for the same `user_id + conversation_id` are serialized to protect
+LangGraph checkpoint updates. Different conversations may run concurrently up
+to the global request limit. Image inference has a separate conservative limit
+because the model objects are shared by the process.
+
+Uploaded source files, generated images, and generated audio are private
+server-side files. The application does not expose `/data` or `/uploads` as
+static directories. A generated medical image is available only from
+`GET /validations/{validation_id}/image`, which authenticates the caller and
+checks ownership before resolving the stored path. Expired private artifacts
+are removed after the configured TTL.
+
+Without `CHECKPOINT_DATABASE_URL`, checkpoint state remains process-local and
+is lost on restart. This mode supports one Uvicorn process only. Configure
+PostgreSQL before adding workers or application containers.

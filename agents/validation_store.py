@@ -131,5 +131,12 @@ class ValidationStore:
         with self._lock:
             return self._records.get(validation_id)
 
+    def get_for_user(self, validation_id: str, *, user_id: str) -> ValidationRecord:
+        """Return an owned validation without revealing foreign record existence."""
+        record = self.get(validation_id)
+        if record is None or record.user_id != user_id:
+            raise KeyError("validation_not_found")
+        return record
+
 
 validation_store = ValidationStore()

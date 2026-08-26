@@ -95,6 +95,7 @@ class SkinLesionSegmentation:
 
     def _overlay_mask(self, img, mask, output_path):
         """Overlay the segmentation mask on the original image."""
+        fig = None
         try:
             mask_stacked = np.stack((mask,) * 3, axis=-1)
             fig, ax = plt.subplots(figsize=(10, 10))
@@ -102,13 +103,16 @@ class SkinLesionSegmentation:
             ax.imshow(img)
             ax.imshow(mask_stacked, alpha=0.4)
             # plt.savefig("overlayed_plot.png", bbox_inches="tight")
-            plt.savefig(output_path, bbox_inches="tight")
+            fig.savefig(output_path, bbox_inches="tight")
             logger.info("Overlayed segmentation mask saved as 'overlayed_plot.png'")
             # return "overlayed_plot.png"
             return True
         except Exception as e:
             logger.error(f"Error generating overlay: {e}")
             raise e
+        finally:
+            if fig is not None:
+                plt.close(fig)
     
     def predict(self, image_path, output_path):
         """Segment lesion in an image and return overlaid visualization."""

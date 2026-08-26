@@ -14,10 +14,10 @@ export default defineConfig(({ mode }) => {
         "/chat": backendTarget,
         "/upload": backendTarget,
         "/validate": backendTarget,
+        "/validations": backendTarget,
+        "/auth": backendTarget,
         "/transcribe": backendTarget,
         "/generate-speech": backendTarget,
-        "/uploads": backendTarget,
-        "/data": backendTarget,
         "/health": backendTarget
       }
     }

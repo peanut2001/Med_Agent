@@ -6,6 +6,7 @@ It dynamically routes user queries to the appropriate agent based on content and
 """
 
 import json
+import threading
 from typing import Dict, List, Optional, Any, Literal, TypedDict, Union, Annotated
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, BaseMessage
 from langchain_core.prompts import ChatPromptTemplate
@@ -21,6 +22,8 @@ from agents.guardrails.local_guardrails import LocalGuardrails
 from agents.guardrails.prompt_safety import redact_sensitive_output, sanitize_untrusted_text, untrusted_block
 
 from agents.checkpoint import get_checkpointer
+from agents.artifacts import produce_private_artifact
+from agents.concurrency import run_agent_request
 from agents.validation_store import validation_store
 
 import cv2
@@ -34,6 +37,7 @@ load_dotenv()
 config = Config()
 
 _compiled_graph = None
+_graph_build_lock = threading.Lock()
 
 
 # Agent that takes the decision of routing the request further to correct task specific agent
@@ -119,6 +123,14 @@ class AgentDecision(TypedDict):
 
 
 def create_agent_graph():
+    """Return the compiled graph, building it exactly once across threads."""
+    if _compiled_graph is not None:
+        return _compiled_graph
+    with _graph_build_lock:
+        return _create_agent_graph_unlocked()
+
+
+def _create_agent_graph_unlocked():
     """Create and configure the LangGraph for agent orchestration."""
     global _compiled_graph
     if _compiled_graph is not None:
@@ -542,8 +554,13 @@ def create_agent_graph():
 
         print(f"Selected agent: SKIN_LESION_AGENT")
 
-        # classify chest x-ray into covid or normal
-        predicted_mask = AgentConfig.image_analyzer.segment_skin_lesion(image_path)
+        output_path = produce_private_artifact(
+            lambda path: AgentConfig.image_analyzer.segment_skin_lesion(
+                image_path, path
+            ),
+            ".png",
+        )
+        predicted_mask = output_path is not None
 
         if predicted_mask:
             response = AIMessage(content="Following is the analyzed **segmented** output of the uploaded skin lesion image:")
@@ -558,7 +575,7 @@ def create_agent_graph():
             "needs_human_validation": True,  # Medical diagnosis always needs validation
             "agent_name": "SKIN_LESION_AGENT",
             "selected_agent": "SKIN_LESION_AGENT",
-            "result_image_path": AgentConfig.image_analyzer.skin_lesion_segmentation_output_path,
+            "result_image_path": str(output_path) if output_path else None,
         }
     
     def handle_human_validation(state: AgentState) -> Dict:
@@ -795,7 +812,12 @@ def process_query(
     
     state["messages"] = [HumanMessage(content=query)]
 
-    result = graph.invoke(
+    # A conversation is strictly serialized so checkpoint state cannot be
+    # updated concurrently. Different conversations can occupy separate
+    # bounded request slots and execute in parallel.
+    result = run_agent_request(
+        state["thread_id"],
+        graph.invoke,
         state,
         {"configurable": {"thread_id": state["thread_id"]}},
     )

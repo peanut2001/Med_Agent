@@ -17,6 +17,14 @@ from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 # Load environment variables from .env file
 load_dotenv()
 
+
+def _positive_int_env(name: str, default: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
 # Common LLM configuration
 API_KEY = os.getenv("OPENAI_API_KEY")
 API_BASE = os.getenv("OPENAI_API_BASE", "https://api.yunnet.top/v1")
@@ -159,7 +167,6 @@ class MedicalCVConfig:
         self.brain_tumor_model_path = "./agents/image_analysis_agent/brain_tumor_agent/models/brain_tumor_segmentation.pth"
         self.chest_xray_model_path = "./agents/image_analysis_agent/chest_xray_agent/models/covid_chest_xray_model.pth"
         self.skin_lesion_model_path = "./agents/image_analysis_agent/skin_lesion_agent/models/checkpointN25_.pth.tar"
-        self.skin_lesion_segmentation_output_path = "./uploads/skin_lesion_output/segmentation_plot.png"
         self.llm = create_llm(
             temperature=0.1,
             model=os.getenv("MEDICAL_CV_MODEL_NAME", MODEL_NAME),
@@ -190,6 +197,9 @@ class APIConfig:
         self.debug = True
         self.rate_limit = 10
         self.max_image_upload_size = 5  # max upload size in MB
+        self.max_concurrent_agent_requests = _positive_int_env("MAX_CONCURRENT_AGENT_REQUESTS", 4)
+        self.max_concurrent_image_inferences = _positive_int_env("MAX_CONCURRENT_IMAGE_INFERENCES", 1)
+        self.private_artifact_ttl_seconds = _positive_int_env("PRIVATE_ARTIFACT_TTL_SECONDS", 86400)
         self.checkpoint_database_url = os.getenv("CHECKPOINT_DATABASE_URL", "")
         self.auth_required = os.getenv("AUTH_REQUIRED", "true").lower() in ("1", "true", "yes", "on")
 
