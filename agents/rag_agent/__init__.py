@@ -175,44 +175,15 @@ class MedicalRAG:
         
         # Process query and return result, passing chat_history
         try:
-            # Step 1: Expand query
-            self.logger.info(f"1. Expanding query: '{query}'")
-            expansion_result = self.query_expander.expand_query(query)
-            expanded_query = expansion_result["expanded_query"]
-            self.logger.info(f"   Original: '{query}'")
-            self.logger.info(f"   Expanded: '{expanded_query}'")
-            query = expanded_query
-
-            # Step 2: Retrieval
-            self.logger.info(f"2. Retrieving relevant documents for the query: '{query}'")
-            vectorstore, docstore = self.vector_store.load_vectorstore()
-            retrieved_documents = self.vector_store.retrieve_relevant_chunks(
-                query=query,
-                vectorstore=vectorstore,
-                docstore=docstore,
-                )
-
-            self.logger.info(f"   Retrieved {len(retrieved_documents)} relevant document chunks")
-
-            # Step 3: Rerank the retrieved documents if we have a reranker and enough documents
-            self.logger.info(f"3. Reranking the retrieved documents")
-            if self.reranker and len(retrieved_documents) > 1:
-                reranked_documents, reranked_top_k_picture_paths = self.reranker.rerank(query, retrieved_documents, self.parsed_content_dir)
-                self.logger.info(f"   Reranked retrieved documents and chose top {len(reranked_documents)}")
-                self.logger.info(f"   Found {len(reranked_top_k_picture_paths)} referenced images")
-            else:
-                self.logger.info(f"   Could not rerank the retrieved documents, falling back to original scores")
-                reranked_documents = retrieved_documents
-                reranked_top_k_picture_paths = []
-
-            # Step 4: Generate response
-            self.logger.info("4. Generating response...")
-            response = self.response_generator.generate_response(
-                query=query,
-                retrieved_docs=reranked_documents,
-                picture_paths=reranked_top_k_picture_paths,
-                chat_history=chat_history
-                )
+            expansion_result = self.expand_query(query)
+            query = expansion_result["expanded_query"]
+            retrieved_documents = self.retrieve_documents(query)
+            reranked_documents, picture_paths, _ = self.rerank_documents(
+                query, retrieved_documents
+            )
+            response = self.generate_answer(
+                query, reranked_documents, picture_paths, chat_history
+            )
             
             # Add timing information
             processing_time = time.time() - start_time
@@ -231,3 +202,49 @@ class MedicalRAG:
                 "confidence": 0.0,
                 "processing_time": time.time() - start_time
             }
+
+    def expand_query(self, query: str) -> Dict[str, Any]:
+        """Expand a query, or return it unchanged when deterministic rules allow."""
+        self.logger.info("1. Preparing query expansion")
+        return self.query_expander.expand_query(query)
+
+    def retrieve_documents(self, query: str) -> List[Dict[str, Any]]:
+        """Run cached hybrid vector retrieval."""
+        self.logger.info("2. Retrieving relevant document chunks")
+        vectorstore, docstore = self.vector_store.load_vectorstore()
+        documents = self.vector_store.retrieve_relevant_chunks(
+            query=query,
+            vectorstore=vectorstore,
+            docstore=docstore,
+        )
+        self.logger.info("Retrieved %s document chunks", len(documents))
+        return documents
+
+    def rerank_documents(
+        self, query: str, documents: List[Dict[str, Any]]
+    ) -> tuple[List[Dict[str, Any]], List[str], bool]:
+        """Rerank candidates and report whether the remote reranker was used."""
+        self.logger.info("3. Reranking retrieved document chunks")
+        if self.reranker and len(documents) > 1:
+            reranked, picture_paths = self.reranker.rerank(
+                query, documents, self.parsed_content_dir
+            )
+            used = any("rerank_score" in document for document in reranked)
+            return reranked, picture_paths, used
+        return documents, [], False
+
+    def generate_answer(
+        self,
+        query: str,
+        documents: List[Dict[str, Any]],
+        picture_paths: List[str],
+        chat_history: Optional[List[Dict[str, str]]] = None,
+    ) -> Dict[str, Any]:
+        """Generate the final answer and confidence from ranked documents."""
+        self.logger.info("4. Generating grounded response")
+        return self.response_generator.generate_response(
+            query=query,
+            retrieved_docs=documents,
+            picture_paths=picture_paths,
+            chat_history=chat_history,
+        )

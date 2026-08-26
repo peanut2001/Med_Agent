@@ -1,6 +1,7 @@
 import os
 import re
 import logging
+from threading import RLock
 from uuid import uuid4
 from pathlib import Path
 from typing import List, Dict, Any, Tuple, Optional
@@ -29,6 +30,9 @@ class VectorStore:
         # Use the singleton client instead of creating a new one
         # self.client = QdrantClientManager.get_client(config)
         self.client = QdrantClient(path=self.vectorstore_local_path)
+        self._cache_lock = RLock()
+        self._cached_vectorstore = None
+        self._cached_docstore = None
 
     def _does_collection_exist(self) -> bool:
         """Check if the collection already exists in Qdrant."""
@@ -62,30 +66,42 @@ class VectorStore:
         Returns:
             Tuple containing (vectorstore, docstore)
         """
-        # Check if collection exists
-        if not self._does_collection_exist():
-            self.logger.error(f"Collection {self.collection_name} does not exist. Please ingest documents first.")
-            raise ValueError(f"Collection {self.collection_name} does not exist")
+        with self._cache_lock:
+            if self._cached_vectorstore is not None and self._cached_docstore is not None:
+                return self._cached_vectorstore, self._cached_docstore
+
+            # Check if collection exists
+            if not self._does_collection_exist():
+                self.logger.error(f"Collection {self.collection_name} does not exist. Please ingest documents first.")
+                raise ValueError(f"Collection {self.collection_name} does not exist")
             
         # Setup sparse embeddings
-        sparse_embeddings = FastEmbedSparse(model_name="Qdrant/bm25")
+            sparse_embeddings = FastEmbedSparse(model_name="Qdrant/bm25")
         
         # Initialize vector store
-        qdrant_vectorstore = QdrantVectorStore(
-            client=self.client,
-            collection_name=self.collection_name,
-            embedding=self.embedding_model,
-            sparse_embedding=sparse_embeddings,
-            retrieval_mode=RetrievalMode.HYBRID,
-            vector_name="dense",
-            sparse_vector_name="sparse",
-        )
+            qdrant_vectorstore = QdrantVectorStore(
+                client=self.client,
+                collection_name=self.collection_name,
+                embedding=self.embedding_model,
+                sparse_embedding=sparse_embeddings,
+                retrieval_mode=RetrievalMode.HYBRID,
+                vector_name="dense",
+                sparse_vector_name="sparse",
+            )
         
         # Document storage
-        docstore = LocalFileStore(self.docstore_local_path)
+            docstore = LocalFileStore(self.docstore_local_path)
         
-        self.logger.info(f"Successfully loaded existing vectorstore and docstore")
-        return qdrant_vectorstore, docstore
+            self._cached_vectorstore = qdrant_vectorstore
+            self._cached_docstore = docstore
+            self.logger.info("Successfully loaded and cached existing vectorstore and docstore")
+            return qdrant_vectorstore, docstore
+
+    def invalidate_cache(self) -> None:
+        """Force retrieval wrappers to be rebuilt after knowledge ingestion."""
+        with self._cache_lock:
+            self._cached_vectorstore = None
+            self._cached_docstore = None
 
     def create_vectorstore(
             self,
@@ -152,6 +168,7 @@ class VectorStore:
         # Encode string chunks to bytes before storing
         encoded_chunks = [chunk.encode('utf-8') for chunk in document_chunks]
         docstore.mset(list(zip(doc_ids, encoded_chunks)))
+        self.invalidate_cache()
 
     def retrieve_relevant_chunks(
             self,

@@ -13,6 +13,7 @@ Each llm definition has unique temperature value relevant to the specific class.
 import os
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from openai import OpenAI
 
 # Load environment variables from .env file
 load_dotenv()
@@ -21,6 +22,14 @@ load_dotenv()
 def _positive_int_env(name: str, default: int) -> int:
     try:
         value = int(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+def _positive_float_env(name: str, default: float) -> float:
+    try:
+        value = float(os.getenv(name, str(default)))
     except ValueError:
         return default
     return value if value > 0 else default
@@ -67,15 +76,25 @@ def create_embeddings() -> OpenAIEmbeddings:
         kwargs["dimensions"] = EMBEDDING_DIM
     return OpenAIEmbeddings(**kwargs)
 
-def create_llm(temperature: float = 0.3, model: str | None = None) -> ChatOpenAI:
+def create_llm(
+    temperature: float = 0.3,
+    model: str | None = None,
+    timeout: float | None = None,
+    max_retries: int | None = None,
+) -> ChatOpenAI:
     """Create a ChatOpenAI instance with common configuration."""
-    return ChatOpenAI(
+    kwargs = dict(
         model=model or MODEL_NAME,
         openai_api_key=API_KEY,
         openai_api_base=API_BASE,
         temperature=temperature,
         streaming=True,
     )
+    if timeout is not None:
+        kwargs["request_timeout"] = timeout
+    if max_retries is not None:
+        kwargs["max_retries"] = max_retries
+    return ChatOpenAI(**kwargs)
 
 class AgentDecisoinConfig:
     def __init__(self):
@@ -93,10 +112,17 @@ class ConversationConfig:
 
 class WebSearchConfig:
     def __init__(self):
-        self.llm = create_llm(
-            temperature=0.3,
-            model=os.getenv("WEB_SEARCH_MODEL_NAME", MODEL_NAME),
-        )  # Slightly creative but factual
+        self.model_name = os.getenv("WEB_SEARCH_MODEL_NAME", "gpt-5.6-sol")
+        self.api_base = os.getenv("WEB_SEARCH_API_BASE") or API_BASE
+        self.api_key = os.getenv("WEB_SEARCH_API_KEY") or API_KEY
+        self.timeout = _positive_float_env("WEB_SEARCH_TIMEOUT_SECONDS", 60.0)
+        self.max_output_tokens = _positive_int_env("WEB_SEARCH_MAX_OUTPUT_TOKENS", 2048)
+        self.responses_client = OpenAI(
+            api_key=self.api_key,
+            base_url=self.api_base,
+            timeout=self.timeout,
+            max_retries=0,
+        )
         self.context_limit = 20     # include last 20 messsages (10 Q&A pairs) in history
 
 class RAGConfig:
@@ -130,6 +156,9 @@ class RAGConfig:
             temperature=0.3,
             model=os.getenv("RAG_RESPONSE_MODEL_NAME", os.getenv("RAG_MODEL_NAME", MODEL_NAME)),
         )
+        self.query_expansion_enabled = os.getenv("RAG_QUERY_EXPANSION_ENABLED", "true").lower() in ("1", "true", "yes", "on")
+        self.skip_simple_query_expansion = os.getenv("RAG_SKIP_SIMPLE_QUERY_EXPANSION", "true").lower() in ("1", "true", "yes", "on")
+        self.simple_query_max_chars = _positive_int_env("RAG_SIMPLE_QUERY_MAX_CHARS", 80)
         self.top_k = 5
         self.vector_search_type = 'similarity'  # or 'mmr'
 
@@ -189,6 +218,25 @@ class ValidationConfig:
         }
         self.validation_timeout = 300
         self.default_action = "reject"
+        self.image_confidence_threshold = float(os.getenv("IMAGE_REVIEW_CONFIDENCE_THRESHOLD", "0.85"))
+        self.high_risk_anomalies = tuple(
+            item.strip() for item in os.getenv(
+                "IMAGE_REVIEW_HIGH_RISK_ANOMALIES",
+                "covid19,malignant,tumor",
+            ).split(",") if item.strip()
+        )
+
+
+class GuardrailConfig:
+    def __init__(self):
+        self.output_timeout_seconds = _positive_float_env("OUTPUT_GUARDRAIL_TIMEOUT_SECONDS", 5.0)
+        self.output_model_name = os.getenv("OUTPUT_GUARDRAIL_MODEL_NAME", "gpt-4o-mini")
+        self.output_llm = create_llm(
+            temperature=0.0,
+            model=self.output_model_name,
+            timeout=self.output_timeout_seconds,
+            max_retries=0,
+        )
 
 class APIConfig:
     def __init__(self):
@@ -220,9 +268,9 @@ class Config:
         self.api = APIConfig()
         self.speech = SpeechConfig()
         self.validation = ValidationConfig()
+        self.guardrails = GuardrailConfig()
         self.ui = UIConfig()
         self.eleven_labs_api_key = os.getenv("ELEVEN_LABS_API_KEY")
-        self.tavily_api_key = os.getenv("TAVILY_API_KEY")
         self.max_conversation_history = 20  # Include last 20 messsages (10 Q&A pairs) in history
 
 # # Example usage

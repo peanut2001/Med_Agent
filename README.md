@@ -142,9 +142,13 @@ embedding_openai_api_version=
 # 新建 Eleven Labs 账户可获得免费额度
 ELEVEN_LABS_API_KEY=
 
-# ===== 网络搜索 API =====
-# 新建 Tavily 账户可获得免费额度
-TAVILY_API_KEY=
+# ===== 联网搜索（Responses API 托管 Web Search）=====
+WEB_SEARCH_MODEL_NAME=gpt-5.6-sol
+# 默认继承 OPENAI_API_BASE / OPENAI_API_KEY；使用独立网关时再填写
+WEB_SEARCH_API_BASE=
+WEB_SEARCH_API_KEY=
+WEB_SEARCH_TIMEOUT_SECONDS=60
+WEB_SEARCH_MAX_OUTPUT_TOKENS=2048
 
 # ===== HuggingFace =====
 # 重排序模型 ms-marco-TinyBERT-L-6
@@ -161,6 +165,17 @@ MAX_CONCURRENT_IMAGE_INFERENCES=1
 PRIVATE_ARTIFACT_TTL_SECONDS=86400
 EXECUTION_TRACE_TTL_SECONDS=3600
 EXECUTION_TRACE_MAX_RECORDS=1000
+
+# ===== RAG 延迟与安全审核 =====
+RAG_QUERY_EXPANSION_ENABLED=true
+RAG_SKIP_SIMPLE_QUERY_EXPANSION=true
+RAG_SIMPLE_QUERY_MAX_CHARS=80
+OUTPUT_GUARDRAIL_MODEL_NAME=gpt-4o-mini
+OUTPUT_GUARDRAIL_TIMEOUT_SECONDS=5
+
+# ===== 医疗影像复核策略 =====
+IMAGE_REVIEW_CONFIDENCE_THRESHOLD=0.85
+IMAGE_REVIEW_HIGH_RISK_ANOMALIES=covid19,malignant,tumor
 ```
 
 ---
@@ -209,10 +224,10 @@ ghcr.io/peanut2001/med-agent:<version>
 发布新版本：
 
 ```bash
-Set-Content VERSION "0.1.1"
+Set-Content VERSION "0.2.1"
 git add VERSION
-git commit -m "release: v0.1.1"
-git tag v0.1.1
+git commit -m "release: v0.2.1"
+git tag v0.2.1
 git push origin main --tags
 ```
 

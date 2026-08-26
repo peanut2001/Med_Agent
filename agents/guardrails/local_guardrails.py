@@ -4,13 +4,20 @@ from langchain_core.runnables import RunnablePassthrough
 from langchain_core.messages import HumanMessage, AIMessage
 from agents.guardrails.prompt_safety import redact_sensitive_output, untrusted_block
 
+
+SAFE_OUTPUT_FALLBACK = (
+    "输出医疗安全检查暂时不可用，因此本次回答未被展示。"
+    "如有紧急症状，请立即联系当地急救服务；其他情况请咨询持证医疗专业人员。"
+)
+
 # LangChain Guardrails
 class LocalGuardrails:
     """Guardrails implementation using purely local components with LangChain."""
     
-    def __init__(self, llm):
+    def __init__(self, llm, output_llm=None):
         """Initialize guardrails with the provided LLM."""
         self.llm = llm
+        self.output_llm = output_llm or llm
         
         # Input guardrails prompt
         self.input_check_prompt = PromptTemplate.from_template(
@@ -106,14 +113,14 @@ class LocalGuardrails:
         # Create the input guardrails chain
         self.input_guardrail_chain = (
             self.input_check_prompt 
-            | self.llm 
+            | self.llm
             | StrOutputParser()
         )
         
         # Create the output guardrails chain
         self.output_guardrail_chain = (
             self.output_check_prompt 
-            | self.llm 
+            | self.output_llm
             | StrOutputParser()
         )
     
@@ -158,3 +165,11 @@ class LocalGuardrails:
         })
 
         return redact_sensitive_output(result)
+
+    def check_output_safely(self, output: str, user_input: str = "") -> tuple[str, str]:
+        """Fail closed when the reviewer model times out or becomes unavailable."""
+        try:
+            return self.check_output(output, user_input), "completed"
+        except Exception as exc:
+            status = "timeout" if "timeout" in type(exc).__name__.lower() else "model_error"
+            return SAFE_OUTPUT_FALLBACK, status

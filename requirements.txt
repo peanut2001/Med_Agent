@@ -105,7 +105,6 @@ jsonschema-specifications==2024.10.1
 jupyterlab_pygments==0.3.0
 kiwisolver==1.4.8
 langchain==0.3.20
-langchain-community==0.3.19
 langchain-core==0.3.44
 langchain-openai==0.3.8
 langchain-qdrant==0.2.0

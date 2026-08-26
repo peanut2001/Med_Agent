@@ -26,7 +26,7 @@ from agents.artifacts import (
     cleanup_expired_artifacts,
     resolve_private_artifact,
 )
-from agents.execution_trace import execution_trace_store
+from agents.execution_trace import TraceAlreadyUsedError, execution_trace_store
 from agents.security import CurrentUser, get_current_user, resolve_conversation_id
 from agents.validation_store import validation_store
 from agents.local_auth import local_auth_store
@@ -34,8 +34,9 @@ from agents.local_auth import local_auth_store
 # Load configuration
 config = Config()
 
-# Initialize FastAPI app
-app = FastAPI(title="Multi-Agent Medical Chatbot", version="2.0")
+# Initialize FastAPI app from the single release-version source.
+APP_VERSION = Path(__file__).with_name("VERSION").read_text(encoding="utf-8").strip()
+app = FastAPI(title="Multi-Agent Medical Chatbot", version=APP_VERSION)
 
 # CORS middleware for cross-origin requests (e.g. Live Server on port 5500)
 app.add_middleware(
@@ -295,7 +296,7 @@ async def chat(
         return _agent_response_payload(response_data, conversation_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Execution trace not found") from exc
-    except ValueError as exc:
+    except TraceAlreadyUsedError as exc:
         raise HTTPException(status_code=409, detail="Execution trace has already been used") from exc
     except Exception as e:
         import traceback
@@ -369,7 +370,7 @@ async def upload_image(
         return _agent_response_payload(response_data, conversation_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Execution trace not found") from exc
-    except ValueError as exc:
+    except TraceAlreadyUsedError as exc:
         raise HTTPException(status_code=409, detail="Execution trace has already been used") from exc
     except Exception as e:
         execution_trace_store.fail_for_user(
@@ -406,6 +407,7 @@ def validate_medical_output(
             conversation_id=conversation_id,
             result=validation_result,
             comments=comments,
+            reviewer_id=current_user.user_id,
         )
 
         if record.status == 'approved':

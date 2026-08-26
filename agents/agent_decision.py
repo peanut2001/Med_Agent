@@ -16,6 +16,7 @@ from langgraph.graph import MessagesState, StateGraph, END
 import os, getpass
 from dotenv import load_dotenv
 from agents.rag_agent import MedicalRAG
+from agents.rag_agent.runtime import RAGRequestContext, rag_request_context_store
 from agents.web_search_processor_agent import WebSearchProcessorAgent
 from agents.image_analysis_agent import ImageAnalysisAgent
 from agents.guardrails.local_guardrails import LocalGuardrails
@@ -26,6 +27,7 @@ from agents.artifacts import produce_private_artifact
 from agents.concurrency import run_agent_request
 from agents.execution_trace import execution_trace_store, trace_context, traced_node
 from agents.validation_store import validation_store
+from agents.review_policy import assess_review_need
 
 import cv2
 import numpy as np
@@ -115,6 +117,11 @@ class AgentState(MessagesState):
     thread_id: str
     execution_trace_id: str
     next_route: Optional[str]
+    trace_metadata: Dict[str, Any]
+    image_classification_confidence: Optional[float]
+    image_quality: Optional[str]
+    anomaly_type: Optional[str]
+    review_reasons: List[str]
 
 
 class AgentDecision(TypedDict):
@@ -139,7 +146,10 @@ def _create_agent_graph_unlocked():
         return _compiled_graph
 
     # Initialize guardrails with the same LLM used elsewhere
-    guardrails = LocalGuardrails(config.rag.llm)
+    guardrails = LocalGuardrails(config.rag.llm, config.guardrails.output_llm)
+    # The compiled graph is process-wide, so this also makes MedicalRAG and its
+    # model/vector-store clients process-wide instead of rebuilding per request.
+    rag_agent = MedicalRAG(config)
 
     # LLM
     decision_model = config.agent_decision.llm
@@ -162,6 +172,7 @@ def _create_agent_graph_unlocked():
         current_input = state["current_input"]
         has_image = False
         image_type = None
+        image_classification_confidence = None
         
         # Get the text from the input
         input_text = ""
@@ -191,12 +202,14 @@ def _create_agent_graph_unlocked():
             image_path = current_input.get("image", None)
             image_type_response = AgentConfig.image_analyzer.analyze_image(image_path)
             image_type = image_type_response['image_type']
+            image_classification_confidence = float(image_type_response.get("confidence", 0.0))
             print("ANALYZED IMAGE TYPE: ", image_type)
         
         return {
             **state,
             "has_image": has_image,
             "image_type": image_type,
+            "image_classification_confidence": image_classification_confidence,
             "bypass_routing": False  # Explicitly set to False for normal flow
         }
     
@@ -371,28 +384,80 @@ def _create_agent_graph_unlocked():
             "selected_agent": "CONVERSATION_AGENT",
         }
     
-    def run_rag_agent(state: AgentState) -> AgentState:
-        """Handle medical knowledge queries using RAG."""
-        # Initialize the RAG agent
-
-        print(f"Selected agent: RAG_AGENT")
-
-        rag_agent = MedicalRAG(config)
-        
+    def prepare_rag_query(state: AgentState) -> AgentState:
+        """Prepare and optionally expand the query without persisting its text."""
+        print("Selected agent: RAG_AGENT")
         messages = state["messages"]
-        query = state["current_input"]
+        current_input = state["current_input"]
+        query = current_input if isinstance(current_input, str) else current_input.get("text", "")
         rag_context_limit = config.rag.context_limit
-
         recent_context = ""
-        for msg in messages[-rag_context_limit:]:# limit controlled from config
+        for msg in messages[-rag_context_limit:]:
             if isinstance(msg, HumanMessage):
-                # print("######### DEBUG 1:", msg)
                 recent_context += f"User: {msg.content}\n"
             elif isinstance(msg, AIMessage):
-                # print("######### DEBUG 2:", msg)
                 recent_context += f"Assistant: {msg.content}\n"
+        expansion = rag_agent.expand_query(query)
+        rag_request_context_store.create(
+            state["execution_trace_id"],
+            RAGRequestContext(
+                original_query=query,
+                query=expansion["expanded_query"],
+                chat_history=recent_context,
+            ),
+        )
+        return {
+            **state,
+            "agent_name": "RAG_AGENT",
+            "selected_agent": "RAG_AGENT",
+            "trace_metadata": {
+                "expansion_skipped": expansion["expansion_skipped"],
+                "expansion_reason": expansion["expansion_reason"],
+            },
+        }
 
-        response = rag_agent.process_query(query, chat_history=recent_context)
+    def retrieve_rag_documents(state: AgentState) -> AgentState:
+        """Run hybrid retrieval and retain document bodies only in memory."""
+        context = rag_request_context_store.get(state["execution_trace_id"])
+        context.retrieved_documents = rag_agent.retrieve_documents(context.query)
+        return {
+            **state,
+            "trace_metadata": {
+                "candidate_count": len(context.retrieved_documents),
+                "retrieval_mode": "hybrid",
+            },
+        }
+
+    def rerank_rag_documents(state: AgentState) -> AgentState:
+        """Rerank retrieval candidates with an observable fallback."""
+        context = rag_request_context_store.get(state["execution_trace_id"])
+        documents, picture_paths, used = rag_agent.rerank_documents(
+            context.query, context.retrieved_documents
+        )
+        context.reranked_documents = documents
+        context.picture_paths = picture_paths
+        attempted = len(context.retrieved_documents) > 1
+        return {
+            **state,
+            "trace_metadata": {
+                "rerank_attempted": attempted,
+                "rerank_fallback": attempted and not used,
+                "input_count": len(context.retrieved_documents),
+                "output_count": len(documents),
+            },
+        }
+
+    def generate_rag_answer(state: AgentState) -> AgentState:
+        """Generate a grounded answer and restore the existing fallback contract."""
+        context = rag_request_context_store.get(state["execution_trace_id"])
+        documents = context.reranked_documents or context.retrieved_documents
+        response = rag_agent.generate_answer(
+            context.query,
+            documents,
+            context.picture_paths,
+            chat_history=context.chat_history,
+        )
+        context.fallback_response = str(response.get("response", ""))
         retrieval_confidence = response.get("confidence", 0.0)  # Default to 0.0 if not provided
 
         print(f"Retrieval Confidence: {retrieval_confidence}")
@@ -445,6 +510,10 @@ def _create_agent_graph_unlocked():
             "selected_agent": "RAG_AGENT",
             "insufficient_info": insufficient_info,
             "needs_rag_fallback": insufficient_info or retrieval_confidence < config.rag.min_retrieval_confidence,
+            "trace_metadata": {
+                "retrieval_confidence": retrieval_confidence,
+                "source_count": len(response.get("sources", [])),
+            },
         }
 
     # Web Search Processor Node
@@ -468,7 +537,42 @@ def _create_agent_graph_unlocked():
 
         web_search_processor = WebSearchProcessorAgent(config)
 
-        processed_response = web_search_processor.process_web_search_results(query=state["current_input"], chat_history=recent_context)
+        web_search_metadata = {
+            "web_search_provider": "openai_responses",
+            "web_search_model": config.web_search.model_name,
+            "web_search_fallback": False,
+        }
+        try:
+            web_result = web_search_processor.process_web_search_results(
+                query=state["current_input"], chat_history=recent_context
+            )
+            processed_response = web_result["message"]
+            web_search_metadata.update({
+                "web_search_model": web_result.get("model", config.web_search.model_name),
+                "web_source_count": web_result.get("source_count", 0),
+            })
+        except Exception as exc:
+            print(f"[WEB_SEARCH_PROCESSOR_AGENT] Safe fallback after {type(exc).__name__}")
+            try:
+                rag_context = rag_request_context_store.get(state["execution_trace_id"])
+                low_confidence_answer = rag_context.fallback_response
+            except RuntimeError:
+                low_confidence_answer = ""
+            if low_confidence_answer:
+                fallback_text = (
+                    "**联网搜索暂时不可用。以下内容仅来自本地知识库，检索置信度较低，请谨慎参考。**\n\n"
+                    + low_confidence_answer
+                )
+            else:
+                fallback_text = (
+                    "联网医疗信息搜索暂时不可用，当前无法提供可靠的最新资料。"
+                    "如问题涉及症状、诊断或治疗，请咨询持证医疗专业人员。"
+                )
+            processed_response = AIMessage(content=fallback_text)
+            web_search_metadata.update({
+                "web_search_fallback": True,
+                "web_search_error_type": type(exc).__name__,
+            })
 
         # print("######### DEBUG WEB SEARCH:", processed_response)
         
@@ -484,6 +588,7 @@ def _create_agent_graph_unlocked():
             "output": processed_response,
             "agent_name": involved_agents,
             "selected_agent": "WEB_SEARCH_PROCESSOR_AGENT",
+            "trace_metadata": web_search_metadata,
         }
 
     # Define Routing Logic
@@ -518,6 +623,7 @@ def _create_agent_graph_unlocked():
             "needs_human_validation": False,
             "agent_name": "BRAIN_TUMOR_AGENT",
             "selected_agent": "BRAIN_TUMOR_AGENT",
+            "anomaly_type": "analysis_unavailable",
         }
     
     def run_chest_xray_agent(state: AgentState) -> AgentState:
@@ -546,6 +652,7 @@ def _create_agent_graph_unlocked():
             "needs_human_validation": True,  # Medical diagnosis always needs validation
             "agent_name": "CHEST_XRAY_AGENT",
             "selected_agent": "CHEST_XRAY_AGENT",
+            "anomaly_type": predicted_class,
         }
     
     def run_skin_lesion_agent(state: AgentState) -> AgentState:
@@ -578,13 +685,30 @@ def _create_agent_graph_unlocked():
             "agent_name": "SKIN_LESION_AGENT",
             "selected_agent": "SKIN_LESION_AGENT",
             "result_image_path": str(output_path) if output_path else None,
+            "anomaly_type": "segmentation_generated" if predicted_mask else "analysis_unavailable",
         }
     
     def handle_human_validation(state: AgentState) -> Dict:
         """Prepare for human validation if needed."""
-        if state.get("needs_human_validation", False):
-            return {"agent_state": state, "next": "human_validation", "agent": "HUMAN_VALIDATION"}
-        return {"agent_state": state, "next": END}
+        decision = assess_review_need(
+            agent_name=state.get("selected_agent"),
+            confidence=state.get("image_classification_confidence"),
+            confidence_threshold=config.validation.image_confidence_threshold,
+            anomaly_type=state.get("anomaly_type"),
+            high_risk_anomalies=config.validation.high_risk_anomalies,
+            image_quality=state.get("image_quality"),
+        )
+        needs_review = state.get("needs_human_validation", False) or decision.required
+        return {
+            **state,
+            "needs_human_validation": needs_review,
+            "review_reasons": list(decision.reasons),
+            "next": "human_validation" if needs_review else END,
+            "trace_metadata": {
+                "review_required": needs_review,
+                "review_reason_count": len(decision.reasons),
+            },
+        }
     
     def perform_human_validation(state: AgentState) -> AgentState:
         """Handle human validation process."""
@@ -603,6 +727,7 @@ def _create_agent_graph_unlocked():
             agent_name=str(state["agent_name"]),
             original_output=state["output"].content,
             result_image_path=state.get("result_image_path"),
+            review_reasons=state.get("review_reasons", []),
         )
 
         return {
@@ -660,7 +785,14 @@ def _create_agent_graph_unlocked():
             input_text = current_input.get("text", "")
         
         # Apply output sanitization
-        sanitized_output = guardrails.check_output(output_text, input_text)
+        sanitized_output, guardrail_status = guardrails.check_output_safely(
+            output_text, input_text
+        )
+        guardrail_metadata = {
+            "guardrail_status": guardrail_status,
+            "guardrail_model": config.guardrails.output_model_name,
+            "guardrail_fallback": guardrail_status != "completed",
+        }
         # sanitized_output = output_text
         
         # For non-validation cases, add the sanitized output to messages
@@ -669,7 +801,8 @@ def _create_agent_graph_unlocked():
         return {
             **state,
             "messages": sanitized_message,
-            "output": sanitized_message
+            "output": sanitized_message,
+            "trace_metadata": guardrail_metadata,
         }
 
     
@@ -680,7 +813,10 @@ def _create_agent_graph_unlocked():
     workflow.add_node("analyze_input", traced_node("analyze_input", analyze_input))
     workflow.add_node("route_to_agent", traced_node("route_to_agent", route_to_agent))
     workflow.add_node("CONVERSATION_AGENT", traced_node("CONVERSATION_AGENT", run_conversation_agent))
-    workflow.add_node("RAG_AGENT", traced_node("RAG_AGENT", run_rag_agent))
+    workflow.add_node("RAG_QUERY_EXPANSION", traced_node("RAG_QUERY_EXPANSION", prepare_rag_query))
+    workflow.add_node("RAG_VECTOR_RETRIEVAL", traced_node("RAG_VECTOR_RETRIEVAL", retrieve_rag_documents))
+    workflow.add_node("RAG_RERANK", traced_node("RAG_RERANK", rerank_rag_documents))
+    workflow.add_node("RAG_ANSWER_GENERATION", traced_node("RAG_ANSWER_GENERATION", generate_rag_answer))
     workflow.add_node("WEB_SEARCH_PROCESSOR_AGENT", traced_node("WEB_SEARCH_PROCESSOR_AGENT", run_web_search_processor_agent))
     workflow.add_node("BRAIN_TUMOR_AGENT", traced_node("BRAIN_TUMOR_AGENT", run_brain_tumor_agent))
     workflow.add_node("CHEST_XRAY_AGENT", traced_node("CHEST_XRAY_AGENT", run_chest_xray_agent))
@@ -708,7 +844,7 @@ def _create_agent_graph_unlocked():
         lambda x: x["next_route"],
         {
             "CONVERSATION_AGENT": "CONVERSATION_AGENT",
-            "RAG_AGENT": "RAG_AGENT",
+            "RAG_AGENT": "RAG_QUERY_EXPANSION",
             "WEB_SEARCH_PROCESSOR_AGENT": "WEB_SEARCH_PROCESSOR_AGENT",
             "BRAIN_TUMOR_AGENT": "BRAIN_TUMOR_AGENT",
             "CHEST_XRAY_AGENT": "CHEST_XRAY_AGENT",
@@ -720,9 +856,11 @@ def _create_agent_graph_unlocked():
     
     # Connect agent outputs to validation check
     workflow.add_edge("CONVERSATION_AGENT", "check_validation")
-    # workflow.add_edge("RAG_AGENT", "check_validation")
+    workflow.add_edge("RAG_QUERY_EXPANSION", "RAG_VECTOR_RETRIEVAL")
+    workflow.add_edge("RAG_VECTOR_RETRIEVAL", "RAG_RERANK")
+    workflow.add_edge("RAG_RERANK", "RAG_ANSWER_GENERATION")
     workflow.add_edge("WEB_SEARCH_PROCESSOR_AGENT", "check_validation")
-    workflow.add_conditional_edges("RAG_AGENT", confidence_based_routing)
+    workflow.add_conditional_edges("RAG_ANSWER_GENERATION", confidence_based_routing)
     workflow.add_edge("BRAIN_TUMOR_AGENT", "check_validation")
     workflow.add_edge("CHEST_XRAY_AGENT", "check_validation")
     workflow.add_edge("SKIN_LESION_AGENT", "check_validation")
@@ -769,6 +907,11 @@ def init_agent_state() -> AgentState:
         "thread_id": "",
         "execution_trace_id": "",
         "next_route": None,
+        "trace_metadata": {},
+        "image_classification_confidence": None,
+        "image_quality": None,
+        "anomaly_type": None,
+        "review_reasons": [],
     }
 
 
@@ -843,6 +986,8 @@ def process_query(
     except BaseException:
         execution_trace_store.finish(trace_id, status="failed")
         raise
+    finally:
+        rag_request_context_store.discard(trace_id)
     execution_trace_store.finish(trace_id, status="completed")
     result["execution_trace"] = execution_trace_store.get_for_user(
         trace_id, user_id=user_id

@@ -79,3 +79,12 @@ def test_owned_preflight_trace_can_fail_without_touching_foreign_trace():
 
     store.fail_for_user(trace_id, user_id="user-a")
     assert store.get_for_user(trace_id, user_id="user-a")["status"] == "failed"
+
+
+def test_reusing_trace_raises_specific_error():
+    store = tracing.ExecutionTraceStore()
+    trace = store.create(user_id="user-a", conversation_id="conversation-a")
+    store.activate(trace["trace_id"], user_id="user-a", conversation_id="conversation-a")
+
+    with pytest.raises(tracing.TraceAlreadyUsedError):
+        store.activate(trace["trace_id"], user_id="user-a", conversation_id="conversation-a")

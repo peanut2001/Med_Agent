@@ -16,16 +16,24 @@ T = TypeVar("T")
 _active_trace_id: ContextVar[Optional[str]] = ContextVar("active_trace_id", default=None)
 
 
+class TraceAlreadyUsedError(ValueError):
+    """Raised only when a pre-created execution trace is activated twice."""
+
+
 NODE_LABELS = {
     "analyze_input": "输入分析与安全检查",
     "route_to_agent": "智能体路由决策",
     "CONVERSATION_AGENT": "通用对话智能体",
     "RAG_AGENT": "医学知识检索智能体",
+    "RAG_QUERY_EXPANSION": "问题扩展",
+    "RAG_VECTOR_RETRIEVAL": "向量检索",
+    "RAG_RERANK": "检索结果重排",
+    "RAG_ANSWER_GENERATION": "RAG 答案生成",
     "WEB_SEARCH_PROCESSOR_AGENT": "联网检索智能体",
     "BRAIN_TUMOR_AGENT": "脑部影像智能体",
     "CHEST_XRAY_AGENT": "胸片分析智能体",
     "SKIN_LESION_AGENT": "皮肤病灶智能体",
-    "check_validation": "人工复核判定",
+    "check_validation": "复核需求判定",
     "human_validation": "创建人工复核任务",
     "apply_guardrails": "输出安全检查",
 }
@@ -91,7 +99,7 @@ class ExecutionTraceStore:
             ):
                 raise KeyError("trace_not_found")
             if record["status"] != "queued":
-                raise ValueError("trace_already_used")
+                raise TraceAlreadyUsedError("trace_already_used")
             record["status"] = "running"
 
     def start_node(self, trace_id: str, node_id: str) -> Optional[str]:
@@ -202,6 +210,9 @@ def _node_metadata(result: Any) -> Dict[str, Any]:
     if not isinstance(result, dict):
         return {}
     metadata: Dict[str, Any] = {}
+    explicit_metadata = result.get("trace_metadata")
+    if isinstance(explicit_metadata, dict):
+        metadata.update(explicit_metadata)
     for key in (
         "selected_agent",
         "next_route",
@@ -224,6 +235,10 @@ def traced_node(node_id: str, operation: Callable[..., T]) -> Callable[..., T]:
         state = args[0] if args and hasattr(args[0], "get") else {}
         trace_id = _active_trace_id.get() or state.get("execution_trace_id")
         event_id = execution_trace_store.start_node(trace_id, node_id) if trace_id else None
+        # trace_metadata belongs to exactly one node. Clear any value copied
+        # through LangGraph state before invoking the next operation.
+        if args and isinstance(state, dict) and state.get("trace_metadata"):
+            args = ({**state, "trace_metadata": {}}, *args[1:])
         try:
             result = operation(*args, **kwargs)
         except BaseException as exc:

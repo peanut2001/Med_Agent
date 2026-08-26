@@ -9,6 +9,6 @@ class WebSearchProcessorAgent:
     def __init__(self, config):
         self.web_search_processor = WebSearchProcessor(config)
     
-    def process_web_search_results(self, query: str, chat_history: Optional[List[Dict[str, str]]] = None) -> str:
+    def process_web_search_results(self, query: str, chat_history: Optional[List[Dict[str, str]]] = None) -> Dict[str, Any]:
         """Processes web search results and returns a user-friendly response."""
         return self.web_search_processor.process_web_results(query, chat_history)

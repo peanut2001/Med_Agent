@@ -27,18 +27,33 @@ const statusCopy = {
 
 function formatDuration(value: number | null) {
   if (value === null) return "运行中";
+  if (value < 1) return "<1 ms";
   if (value < 1000) return `${Math.round(value)} ms`;
   return `${(value / 1000).toFixed(2)} s`;
 }
 
 function nodeDetail(node: TraceNode) {
   const metadata = node.metadata;
-  const agent = metadata.selected_agent || metadata.next_route;
-  if (typeof agent === "string") return `路由：${agent}`;
-  if (typeof metadata.image_type === "string") return `影像类型：${metadata.image_type}`;
+  if (typeof metadata.candidate_count === "number") return `候选文档：${metadata.candidate_count}`;
+  if (typeof metadata.output_count === "number") {
+    return metadata.rerank_fallback ? `重排降级：保留 ${metadata.output_count} 条` : `重排结果：${metadata.output_count} 条`;
+  }
+  if (typeof metadata.expansion_skipped === "boolean") {
+    return metadata.expansion_skipped ? "已跳过 LLM 查询扩展" : "已执行 LLM 查询扩展";
+  }
+  if (typeof metadata.guardrail_status === "string") {
+    return metadata.guardrail_fallback ? `安全降级：${metadata.guardrail_status}` : "医疗安全检查通过";
+  }
+  if (typeof metadata.web_search_provider === "string") {
+    if (metadata.web_search_fallback) return `联网降级：${metadata.web_search_error_type || "服务不可用"}`;
+    return `联网来源：${metadata.web_source_count || 0} 条`;
+  }
   if (typeof metadata.retrieval_confidence === "number") {
     return `检索置信度：${Math.round(metadata.retrieval_confidence * 100)}%`;
   }
+  const agent = metadata.selected_agent || metadata.next_route;
+  if (typeof agent === "string") return `路由：${agent}`;
+  if (typeof metadata.image_type === "string") return `影像类型：${metadata.image_type}`;
   if (typeof metadata.decision_confidence === "number") {
     return `决策置信度：${Math.round(metadata.decision_confidence * 100)}%`;
   }
