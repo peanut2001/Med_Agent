@@ -30,7 +30,21 @@ class Reranker:
         # are truncated before scoring so one oversized chunk cannot 400 the
         # whole batch — relevance is judged on the leading text anyway.
         self.max_doc_chars = config.rag.reranker_max_doc_chars
+        # Empty by default: reference image links stay same-origin relative so
+        # they keep working behind any host, port or reverse proxy.
+        self.public_base_url = getattr(config.rag, "public_base_url", "")
         self.logger.info(f"Using remote reranker model: {self.model_name} at {self.endpoint}")
+
+    def _picture_url(self, parsed_content_dir: str, filename: str) -> str:
+        """Build a URL for a parsed-document image.
+
+        ``os.path.join`` must not be used here: on Windows it emits backslashes,
+        which are not valid URL separators.
+        """
+        directory = str(parsed_content_dir).replace("\\", "/").strip("/")
+        if directory.startswith("./"):
+            directory = directory[2:]
+        return f"{self.public_base_url}/{directory}/{filename}"
 
     def _score(self, query: str, texts: List[str]) -> List[float]:
         """
@@ -130,14 +144,21 @@ class Reranker:
             # Extract picture references
             picture_reference_paths = []
             for doc in reranked_docs:
-                matches = re.finditer(r"picture_counter_(\d+)", doc["content"])
-                for match in matches:
+                # A document without a "source" cannot be turned into an image
+                # path; skip it instead of raising, which previously aborted the
+                # whole rerank and silently fell back to the original ordering.
+                source = doc.get("source")
+                if not source:
+                    continue
+                doc_basename = os.path.splitext(str(source))[0]  # Remove file extension
+                for match in re.finditer(r"picture_counter_(\d+)", doc["content"]):
                     counter_value = int(match.group(1))
-                    # Create picture path based on document source and counter
-                    doc_basename = os.path.splitext(doc['source'])[0]  # Remove file extension
-                    # picture_path = Path(os.path.abspath(parsed_content_dir + "/" + f"{doc_basename}-picture-{counter_value}.png")).as_uri()
-                    picture_path = os.path.join("http://localhost:8000/", parsed_content_dir + "/" + f"{doc_basename}-picture-{counter_value}.png")
-                    picture_reference_paths.append(picture_path)
+                    picture_reference_paths.append(
+                        self._picture_url(
+                            parsed_content_dir,
+                            f"{doc_basename}-picture-{counter_value}.png",
+                        )
+                    )
 
             return reranked_docs, picture_reference_paths
 

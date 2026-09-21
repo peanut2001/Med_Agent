@@ -7,6 +7,12 @@ from typing import Dict, List, Tuple, Any
 
 import requests
 import pypdfium2 as pdfium
+import pypdfium2.raw as pdfium_c
+
+# Figures are filtered on their rendered size on the page, not their pixel
+# size: thumbnails, author headshots and journal logos are often embedded at
+# high resolution but drawn tiny, so pixel size does not separate them.
+MIN_PICTURE_POINTS = float(os.getenv("DOC_PARSER_MIN_PICTURE_POINTS", "150"))
 
 
 class ParsedDocument:
@@ -18,8 +24,13 @@ class ParsedDocument:
     fall back to page boundaries.
     """
 
-    def __init__(self, pages: List[str]):
+    def __init__(self, pages: List[str], page_image_counts: List[int] = None):
         self.pages = pages
+        # How many extracted figures belong to each page. The remote parser
+        # returns a flat text stream with no figure coordinates, so a page's
+        # placeholders are appended at the end of that page's text — the
+        # summaries land on the right page, just not at the exact paragraph.
+        self.page_image_counts = page_image_counts or [0] * len(pages)
 
     def export_to_markdown(
         self,
@@ -29,12 +40,20 @@ class ParsedDocument:
         """
         Join per-page text into a single document.
 
-        ``image_placeholder`` is accepted for API compatibility but never
-        emitted: the remote parser returns a flat text stream with no image
-        positions, so there is nothing to anchor a placeholder to.
+        When ``image_placeholder`` is given, one placeholder per extracted
+        figure is appended to its page, in extraction order. The downstream
+        content processor swaps each placeholder for the figure's summary.
         """
         separator = f"\n{page_break_placeholder}\n" if page_break_placeholder else "\n\n"
-        return separator.join(self.pages)
+        if not image_placeholder:
+            return separator.join(self.pages)
+
+        rendered = []
+        for page_text, image_count in zip(self.pages, self.page_image_counts):
+            if image_count:
+                page_text = page_text + "\n\n" + "\n".join([image_placeholder] * image_count)
+            rendered.append(page_text)
+        return separator.join(rendered)
 
 
 class MedicalDocParser:
@@ -92,6 +111,45 @@ class MedicalDocParser:
         response.raise_for_status()
         return response.json()["choices"][0]["message"]["content"]
 
+    def _extract_page_pictures(
+        self, page, doc_filename: str, output_dir_path: Path, start_index: int
+    ) -> List[str]:
+        """Save a page's embedded figures and return their data URLs.
+
+        Files are named ``<doc>-picture-<n>.png`` because that is the name the
+        reranker builds when it turns a ``picture_counter_<n>`` marker back
+        into a reference link.
+        """
+        data_urls: List[str] = []
+        index = start_index
+        for obj in page.get_objects():
+            if obj.type != pdfium_c.FPDF_PAGEOBJ_IMAGE:
+                continue
+            try:
+                left, bottom, right, top = obj.get_pos()
+            except Exception as exc:
+                self.logger.warning(f"   Skipped an image with no position: {exc}")
+                continue
+            if min(abs(right - left), abs(top - bottom)) < MIN_PICTURE_POINTS:
+                continue
+            try:
+                pil_image = obj.get_bitmap().to_pil()
+            except Exception as exc:
+                self.logger.warning(f"   Skipped an unreadable embedded image: {exc}")
+                continue
+            if pil_image.mode not in ("RGB", "L"):
+                pil_image = pil_image.convert("RGB")
+
+            buffer = io.BytesIO()
+            pil_image.save(buffer, format="PNG")
+            png_bytes = buffer.getvalue()
+            (output_dir_path / f"{doc_filename}-picture-{index}.png").write_bytes(png_bytes)
+            data_urls.append(
+                "data:image/png;base64," + base64.b64encode(png_bytes).decode()
+            )
+            index += 1
+        return data_urls
+
     def parse_document(
             self,
             document_path: str,
@@ -114,9 +172,9 @@ class MedicalDocParser:
                 handles all of these internally and they are ignored.
 
         Returns:
-            Tuple containing (parsed_document, list_of_image_paths). The image
-            list is always empty: the remote parser returns text only, with no
-            figure coordinates to crop from.
+            Tuple containing (parsed_document, list_of_image_data_urls). The
+            figures are embedded bitmaps extracted from the PDF itself, since
+            the remote parser returns text only with no figure coordinates.
         """
         output_dir_path = Path(output_dir)
         output_dir_path.mkdir(parents=True, exist_ok=True)
@@ -128,10 +186,22 @@ class MedicalDocParser:
 
         pages: List[str] = []
         failed_pages: List[int] = []
+        page_image_counts: List[int] = []
+        image_data_urls: List[str] = []
 
         for page_index in range(total_pages):
             page_no = page_index + 1
-            pil_image = pdf[page_index].render(scale=image_resolution_scale).to_pil()
+            page = pdf[page_index]
+
+            # Extract this page's figures before parsing its text, so the
+            # placeholder count matches what gets appended to the page.
+            page_pictures = self._extract_page_pictures(
+                page, doc_filename, output_dir_path, len(image_data_urls)
+            )
+            image_data_urls.extend(page_pictures)
+            page_image_counts.append(len(page_pictures))
+
+            pil_image = page.render(scale=image_resolution_scale).to_pil()
 
             buffer = io.BytesIO()
             pil_image.save(buffer, format="PNG")
@@ -156,4 +226,5 @@ class MedicalDocParser:
         if failed_pages:
             self.logger.warning(f"   {len(failed_pages)} page(s) failed to parse: {failed_pages}")
 
-        return ParsedDocument(pages), []
+        self.logger.info(f"   Extracted {len(image_data_urls)} figures")
+        return ParsedDocument(pages, page_image_counts), image_data_urls

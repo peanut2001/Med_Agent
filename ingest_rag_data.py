@@ -57,6 +57,10 @@ if __name__ == "__main__":
     print("\nIngesting document(s)...")
 
     ingestion_success = data_ingestion()
-    
+
     if ingestion_success:
         print("\nSuccessfully ingested the documents.")
+    else:
+        # Exit non-zero so a failed run cannot be mistaken for a good one.
+        print("\nIngestion failed. See 'failed_files' above; the vector store may be incomplete.")
+        sys.exit(1)

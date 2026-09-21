@@ -12,6 +12,25 @@ from langchain_qdrant import FastEmbedSparse, QdrantVectorStore, RetrievalMode
 from qdrant_client import QdrantClient, models
 from qdrant_client.http.models import Distance, SparseVectorParams, VectorParams, OptimizersConfigDiff
 
+
+def _source_url(document_path: str) -> str:
+    """Build the stored link for a source document.
+
+    ``os.path.join`` must not be used for URLs: on Windows it emits
+    backslashes. The prefix is empty by default so the link stays same-origin
+    relative and keeps working behind any host, port or reverse proxy; set
+    PUBLIC_BASE_URL only when documents are served from another origin.
+
+    Note this value is written into the vector store at ingest time, so
+    existing collections keep whatever prefix they were ingested with.
+    """
+    prefix = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
+    relative = str(document_path).replace("\\", "/").strip("/")
+    if relative.startswith("./"):
+        relative = relative[2:]
+    return f"{prefix}/{relative}"
+
+
 class VectorStore:
     """
     Create vector store, ingest documents, retrieve relevant documents
@@ -132,7 +151,7 @@ class VectorStore:
                         "source": os.path.basename(document_path),
                         "doc_id": doc_ids[id_idx],
                         # "source_path": Path(os.path.abspath(document_path)).as_uri()
-                        "source_path": os.path.join("http://localhost:8000/", document_path)
+                        "source_path": _source_url(document_path),
                     }
                 )
             )

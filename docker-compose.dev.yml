@@ -33,7 +33,7 @@
     container_name: medical-assistant-frontend-dev
     working_dir: /frontend
     ports:
-      - "5173:5173"
+      - "5175:5173"
     environment:
       - VITE_BACKEND_TARGET=http://medical-assistant-dev:8000
       - CHOKIDAR_USEPOLLING=true

@@ -139,10 +139,14 @@ class ResponseGenerator:
             else:
                 response_with_source = redact_sensitive_output(response.content)
             
-            # Add picture paths to response
-            response_with_source_and_picture_paths = response_with_source + "\n\n##### Reference images:"
-            for picture_path in picture_paths:
-                response_with_source_and_picture_paths += f"\n- [{picture_path.split('/')[-1]}]({picture_path})"
+            # Add picture paths to response, but only when there is at least one
+            # (an empty "Reference images" heading was previously appended to
+            # every answer).
+            response_with_source_and_picture_paths = response_with_source
+            if picture_paths:
+                response_with_source_and_picture_paths += "\n\n##### Reference images:"
+                for picture_path in picture_paths:
+                    response_with_source_and_picture_paths += f"\n- [{picture_path.split('/')[-1]}]({picture_path})"
             
             # Format final response
             result = {

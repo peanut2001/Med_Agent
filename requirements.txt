@@ -1,3 +1,13 @@
+# Pull torch/torchvision from the CPU-only wheel index.
+# The project runs both CV models (chest X-ray DenseNet121, skin lesion U-Net)
+# on CPU in well under a second, so the CUDA build is pure dead weight.
+# On Linux the default PyPI torch wheel bundles CUDA (multi-GB + nvidia-* deps);
+# this index makes `pip install -r requirements.txt` resolve to 2.7.0+cpu there
+# too (PEP 440: 2.7.0+cpu outranks 2.7.0, so the CPU wheel wins).
+# Windows PyPI wheels are already CPU-only, and the Dockerfile pre-installs the
+# CPU build explicitly, so neither of those paths changes.
+--extra-index-url https://download.pytorch.org/whl/cpu
+
 aiofiles==24.1.0
 aiohappyeyeballs==2.6.1
 aiohttp==3.11.13
@@ -32,10 +42,8 @@ defusedxml==0.7.1
 Deprecated==1.2.18
 dill==0.4.0
 distro==1.9.0
-docling==2.31.0
-docling-core==2.28.1
-docling-ibm-models==3.4.2
-docling-parse==4.0.1
+# docling* removed: PDF parsing moved to the remote vision model
+# (DOC_PARSER_MODEL_NAME) in agents/rag_agent/doc_parser.py.
 docopt==0.6.2
 easyocr==1.7.2
 effdet==0.4.1
@@ -228,7 +236,8 @@ scipy==1.15.2
 seaborn==0.13.2
 semantic-version==2.10.0
 semchunk==2.2.2
-sentence-transformers==3.4.1
+# sentence-transformers removed: reranking moved to the remote
+# /v1/rerank endpoint (RERANKER_MODEL_NAME) in agents/rag_agent/reranker.py.
 setuptools==75.8.0
 shapely==2.1.0
 shellingham==1.5.4

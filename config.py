@@ -186,6 +186,11 @@ class RAGConfig:
 
         self.include_sources = True  # Show links to reference documents and images along with corresponding query response
 
+        # Base URL prefix for reference image links in RAG answers. Empty means
+        # same-origin relative links, which work behind any host/port; set it
+        # only when the images are served from a different origin (CDN, etc.).
+        self.public_base_url = os.getenv("PUBLIC_BASE_URL", "").rstrip("/")
+
         # ADJUST ACCORDING TO ASSISTANT'S BEHAVIOUR BASED ON THE DATA INGESTED:
         self.min_retrieval_confidence = 0.40  # The auto routing from RAG agent to WEB_SEARCH agent is dependent on this value
 
@@ -237,6 +242,20 @@ class GuardrailConfig:
             timeout=self.output_timeout_seconds,
             max_retries=0,
         )
+        # The input filter runs before anything else on every request, so it
+        # needs its own bounded timeout. Without one it inherits the SDK
+        # default (600s) and a slow gateway blocks the request thread.
+        self.input_timeout_seconds = _positive_float_env("INPUT_GUARDRAIL_TIMEOUT_SECONDS", 10.0)
+        self.input_model_name = os.getenv("INPUT_GUARDRAIL_MODEL_NAME", MODEL_NAME)
+        self.input_llm = create_llm(
+            temperature=0.0,
+            model=self.input_model_name,
+            timeout=self.input_timeout_seconds,
+            max_retries=0,
+        )
+        # When the input filter itself fails, refuse the request rather than
+        # letting unchecked text reach the medical agents.
+        self.input_fail_open = os.getenv("INPUT_GUARDRAIL_FAIL_OPEN", "false").lower() in ("1", "true", "yes", "on")
 
 class APIConfig:
     def __init__(self):

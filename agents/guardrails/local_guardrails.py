@@ -10,13 +10,18 @@ SAFE_OUTPUT_FALLBACK = (
     "如有紧急症状，请立即联系当地急救服务；其他情况请咨询持证医疗专业人员。"
 )
 
+SAFE_INPUT_FALLBACK = (
+    "输入医疗安全检查暂时不可用，因此本次请求未被处理，请稍后重试。"
+    "如有紧急症状，请立即联系当地急救服务。"
+)
+
 # LangChain Guardrails
 class LocalGuardrails:
     """Guardrails implementation using purely local components with LangChain."""
     
-    def __init__(self, llm, output_llm=None):
+    def __init__(self, llm, output_llm=None, input_llm=None):
         """Initialize guardrails with the provided LLM."""
-        self.llm = llm
+        self.llm = input_llm or llm
         self.output_llm = output_llm or llm
         
         # Input guardrails prompt
@@ -139,8 +144,27 @@ class LocalGuardrails:
         if result.startswith("UNSAFE"):
             reason = result.split(":", 1)[1].strip() if ":" in result else "Content policy violation"
             return False, AIMessage(content = f"I cannot process this request. Reason: {reason}")
-        
+
         return True, user_input
+
+    def check_input_safely(
+        self, user_input: str, *, fail_open: bool = False
+    ) -> tuple[bool, str, str]:
+        """Fail closed when the input filter times out or becomes unavailable.
+
+        Mirrors :meth:`check_output_safely`. Returns ``(is_allowed, message,
+        status)``. On failure the request is refused by default so unchecked
+        text never reaches the medical agents; set ``fail_open`` to let it
+        through instead (availability over strictness).
+        """
+        try:
+            is_allowed, message = self.check_input(user_input)
+            return is_allowed, message, "completed"
+        except Exception as exc:
+            status = "timeout" if "timeout" in type(exc).__name__.lower() else "model_error"
+            if fail_open:
+                return True, user_input, status
+            return False, AIMessage(content=SAFE_INPUT_FALLBACK), status
     
     def check_output(self, output: str, user_input: str = "") -> str:
         """

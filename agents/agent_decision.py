@@ -18,7 +18,7 @@ from dotenv import load_dotenv
 from agents.rag_agent import MedicalRAG
 from agents.rag_agent.runtime import RAGRequestContext, rag_request_context_store
 from agents.web_search_processor_agent import WebSearchProcessorAgent
-from agents.image_analysis_agent import ImageAnalysisAgent
+from agents.image_analysis_agent import ImageAnalysisAgent, ImageModelUnavailableError
 from agents.guardrails.local_guardrails import LocalGuardrails
 from agents.guardrails.prompt_safety import redact_sensitive_output, sanitize_untrusted_text, untrusted_block
 
@@ -41,6 +41,29 @@ config = Config()
 
 _compiled_graph = None
 _graph_build_lock = threading.Lock()
+
+
+def _image_model_unavailable_state(state, agent_name: str, label: str):
+    """Answer for an image agent whose local model could not be loaded.
+
+    Mirrors the brain tumor agent: no diagnosis is implied and no human review
+    is queued, because there is no model output to review.
+    """
+    response = AIMessage(
+        content=(
+            f"{label}分析当前不可用（本地模型未就绪）。"
+            "请勿将此回复视为诊断结论，如有需要请咨询专业医生。"
+        )
+    )
+    return {
+        **state,
+        "output": response,
+        "needs_human_validation": False,
+        "agent_name": agent_name,
+        "selected_agent": agent_name,
+        "result_image_path": None,
+        "anomaly_type": "analysis_unavailable",
+    }
 
 
 # Agent that takes the decision of routing the request further to correct task specific agent
@@ -145,8 +168,12 @@ def _create_agent_graph_unlocked():
     if _compiled_graph is not None:
         return _compiled_graph
 
-    # Initialize guardrails with the same LLM used elsewhere
-    guardrails = LocalGuardrails(config.rag.llm, config.guardrails.output_llm)
+    # Input and output filters each get their own bounded-timeout model.
+    guardrails = LocalGuardrails(
+        config.rag.llm,
+        config.guardrails.output_llm,
+        input_llm=config.guardrails.input_llm,
+    )
     # The compiled graph is process-wide, so this also makes MedicalRAG and its
     # model/vector-store clients process-wide instead of rebuilding per request.
     rag_agent = MedicalRAG(config)
@@ -183,7 +210,11 @@ def _create_agent_graph_unlocked():
         
         # Check input through guardrails if text is present
         if input_text:
-            is_allowed, message = guardrails.check_input(input_text)
+            is_allowed, message, guardrail_status = guardrails.check_input_safely(
+                input_text, fail_open=config.guardrails.input_fail_open
+            )
+            if guardrail_status != "completed":
+                print(f"Input guardrail degraded: {guardrail_status}")
             if not is_allowed:
                 # If input is blocked, return early with guardrail message
                 print(f"Selected agent: INPUT GUARDRAILS, Message: ", message)
@@ -635,7 +666,10 @@ def _create_agent_graph_unlocked():
         print(f"Selected agent: CHEST_XRAY_AGENT")
 
         # classify chest x-ray into covid or normal
-        predicted_class = AgentConfig.image_analyzer.classify_chest_xray(image_path)
+        try:
+            predicted_class = AgentConfig.image_analyzer.classify_chest_xray(image_path)
+        except ImageModelUnavailableError:
+            return _image_model_unavailable_state(state, "CHEST_XRAY_AGENT", "胸片")
 
         if predicted_class == "covid19":
             response = AIMessage(content="The analysis of the uploaded chest X-ray image indicates a **POSITIVE** result for **COVID-19**.")
@@ -663,12 +697,15 @@ def _create_agent_graph_unlocked():
 
         print(f"Selected agent: SKIN_LESION_AGENT")
 
-        output_path = produce_private_artifact(
-            lambda path: AgentConfig.image_analyzer.segment_skin_lesion(
-                image_path, path
-            ),
-            ".png",
-        )
+        try:
+            output_path = produce_private_artifact(
+                lambda path: AgentConfig.image_analyzer.segment_skin_lesion(
+                    image_path, path
+                ),
+                ".png",
+            )
+        except ImageModelUnavailableError:
+            return _image_model_unavailable_state(state, "SKIN_LESION_AGENT", "皮肤病灶")
         predicted_mask = output_path is not None
 
         if predicted_mask:

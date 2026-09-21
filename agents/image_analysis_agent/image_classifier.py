@@ -4,6 +4,7 @@ import base64
 from mimetypes import guess_type
 
 from typing import TypedDict
+from langchain_core.exceptions import OutputParserException
 from langchain_core.output_parsers import JsonOutputParser
 
 class ClassificationDecision(TypedDict):
@@ -60,11 +61,17 @@ class ImageClassifier:
         response = self.vision_model.invoke(vision_prompt)
 
         try:
-            # Ensure the response is parsed as JSON
+            # Ensure the response is parsed as JSON.
+            # JsonOutputParser raises OutputParserException (not JSONDecodeError)
+            # when the model answers with prose or a fenced block it cannot read.
             response_json = self.json_parser.parse(response.content)
-            return response_json  # Returns a dictionary instead of a string
-        except json.JSONDecodeError:
+        except (OutputParserException, json.JSONDecodeError):
             print("[ImageAnalyzer] Warning: Response was not valid JSON.")
             return {"image_type": "unknown", "reasoning": "Invalid JSON response", "confidence": 0.0}
+
+        if not isinstance(response_json, dict):
+            print("[ImageAnalyzer] Warning: Parsed response was not an object.")
+            return {"image_type": "unknown", "reasoning": "Invalid JSON response", "confidence": 0.0}
+        return response_json  # Returns a dictionary instead of a string
 
         # return response.content.strip().lower()

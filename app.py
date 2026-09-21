@@ -62,6 +62,16 @@ SPEECH_DIR = "uploads/speech"
 for directory in [UPLOAD_FOLDER, PRIVATE_ARTIFACT_ROOT, SPEECH_DIR]:
     os.makedirs(directory, exist_ok=True)
 
+# Source documents cited by RAG answers. Only these extensions are served, and
+# only from directly inside this root.
+RAW_DOCS_ROOT = Path(os.getenv("RAW_DOCS_ROOT", "data/raw")).resolve()
+SOURCE_DOCUMENT_EXTENSIONS = {".pdf"}
+
+# Figures extracted from those documents, cited as reference images in RAG
+# answers (see reranker._picture_url).
+PARSED_DOCS_ROOT = Path(config.rag.parsed_content_dir).resolve()
+REFERENCE_IMAGE_EXTENSIONS = {".png"}
+
 FRONTEND_DIST = Path("frontend/dist")
 FRONTEND_INDEX = FRONTEND_DIST / "index.html"
 FRONTEND_ASSETS = FRONTEND_DIST / "assets"
@@ -134,8 +144,10 @@ class TraceStartRequest(BaseModel):
     conversation_id: Optional[str] = None
 
 class SpeechRequest(BaseModel):
+    # Falls back to the configured voice instead of a placeholder id, which the
+    # speech API would reject for any client that omits the field.
     text: str
-    voice_id: str = "EXAMPLE_VOICE_ID"  # Default voice ID
+    voice_id: str = config.speech.eleven_labs_voice_id
 
 
 class LocalLoginRequest(BaseModel):
@@ -290,7 +302,7 @@ async def chat(
         )
         
         # Set session cookie
-        response.set_cookie(key="session_id", value=session_id)
+        response.set_cookie(key="session_id", value=session_id, httponly=True, samesite="lax")
         response.set_cookie(key="conversation_id", value=conversation_id, httponly=True, samesite="lax")
 
         return _agent_response_payload(response_data, conversation_id)
@@ -298,10 +310,12 @@ async def chat(
         raise HTTPException(status_code=404, detail="Execution trace not found") from exc
     except TraceAlreadyUsedError as exc:
         raise HTTPException(status_code=409, detail="Execution trace has already been used") from exc
-    except Exception as e:
+    except Exception:
+        # Log the cause server-side; the client gets a generic message so
+        # gateway URLs, model names and file paths are not leaked.
         import traceback
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Unable to process the query")
 
 @app.post("/upload")
 async def upload_image(
@@ -364,7 +378,7 @@ async def upload_image(
         )
 
         # Set session cookie
-        response.set_cookie(key="session_id", value=session_id)
+        response.set_cookie(key="session_id", value=session_id, httponly=True, samesite="lax")
         response.set_cookie(key="conversation_id", value=conversation_id, httponly=True, samesite="lax")
 
         return _agent_response_payload(response_data, conversation_id)
@@ -372,11 +386,13 @@ async def upload_image(
         raise HTTPException(status_code=404, detail="Execution trace not found") from exc
     except TraceAlreadyUsedError as exc:
         raise HTTPException(status_code=409, detail="Execution trace has already been used") from exc
-    except Exception as e:
+    except Exception:
+        import traceback
+        traceback.print_exc()
         execution_trace_store.fail_for_user(
             trace_id, user_id=current_user.user_id
         )
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Unable to process the image")
     finally:
         await run_in_threadpool(_safe_unlink, file_path)
 
@@ -399,7 +415,7 @@ def validate_medical_output(
 
     try:
         # Set session cookie
-        response.set_cookie(key="session_id", value=session_id)
+        response.set_cookie(key="session_id", value=session_id, httponly=True, samesite="lax")
         response.set_cookie(key="conversation_id", value=conversation_id, httponly=True, samesite="lax")
         record = validation_store.resolve(
             validation_id,
@@ -431,8 +447,68 @@ def validate_medical_output(
         raise HTTPException(status_code=403, detail="Validation does not belong to this user or conversation") from exc
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Validation request not found") from exc
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail="Unable to record the validation")
+
+
+@app.get("/data/raw/{filename}")
+def get_source_document(
+    filename: str,
+    _current_user: CurrentUser = Depends(get_current_user),
+):
+    """Serve a cited source document to signed-in users.
+
+    RAG answers cite their sources as links under ``/data/raw/...`` (see
+    vectorstore_qdrant._source_url), but nothing served that path, so every
+    citation was a dead link. Only regular files directly inside the raw
+    document root are returned, and only for allowed extensions.
+    """
+    if not filename or "/" in filename or "\\" in filename or filename.startswith("."):
+        raise HTTPException(status_code=404, detail="Source document not found")
+    if Path(filename).suffix.lower() not in SOURCE_DOCUMENT_EXTENSIONS:
+        raise HTTPException(status_code=404, detail="Source document not found")
+
+    candidate = (RAW_DOCS_ROOT / filename).resolve()
+    try:
+        candidate.relative_to(RAW_DOCS_ROOT)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Source document not found")
+    if not candidate.is_file():
+        raise HTTPException(status_code=404, detail="Source document not found")
+
+    return FileResponse(
+        path=candidate,
+        media_type="application/pdf",
+        headers={"Cache-Control": "private, max-age=300"},
+    )
+
+
+@app.get("/data/parsed_docs/{filename}")
+def get_reference_image(
+    filename: str,
+    _current_user: CurrentUser = Depends(get_current_user),
+):
+    """Serve a figure cited by a RAG answer, to signed-in users only."""
+    if not filename or "/" in filename or "\\" in filename or filename.startswith("."):
+        raise HTTPException(status_code=404, detail="Reference image not found")
+    if Path(filename).suffix.lower() not in REFERENCE_IMAGE_EXTENSIONS:
+        raise HTTPException(status_code=404, detail="Reference image not found")
+
+    candidate = (PARSED_DOCS_ROOT / filename).resolve()
+    try:
+        candidate.relative_to(PARSED_DOCS_ROOT)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Reference image not found")
+    if not candidate.is_file():
+        raise HTTPException(status_code=404, detail="Reference image not found")
+
+    return FileResponse(
+        path=candidate,
+        media_type="image/png",
+        headers={"Cache-Control": "private, max-age=300"},
+    )
 
 
 @app.get("/validations/{validation_id}/image")
@@ -555,17 +631,8 @@ async def generate_speech(
             content={"error": "Unable to generate speech"}
         )
 
-# Add exception handler for request entity too large
-@app.exception_handler(413)
-async def request_entity_too_large(request, exc):
-    return JSONResponse(
-        status_code=413,
-        content={
-            "status": "error",
-            "agent": "System",
-            "response": f"File too large. Maximum size allowed: {config.api.max_image_upload_size}MB"
-        }
-    )
+# Oversized uploads are already rejected inside /upload, which returns this
+# same payload directly; a 413 exception handler never fired and was removed.
 
 if __name__ == "__main__":
     uvicorn.run(app, host=config.api.host, port=config.api.port)

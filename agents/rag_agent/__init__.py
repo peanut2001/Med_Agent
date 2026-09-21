@@ -88,7 +88,10 @@ class MedicalRAG:
                     failed_files.append({"file": file_path, "error": str(e)})
             
             return {
-                "success": True,
+                # Reflect the actual outcome: this used to be hardcoded True,
+                # so a run where every document failed still reported success
+                # and exited 0.
+                "success": failed_ingestions == 0,
                 "documents_ingested": successful_ingestions,
                 "failed_documents": failed_ingestions,
                 "failed_files": failed_files,
