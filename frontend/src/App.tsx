@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createExecutionTrace, getCurrentUser, getExecutionTrace, loginLocal, registerLocal, logoutLocal, sendChat, uploadImage, validateMedicalOutput } from "./api/client";
+import { AuthScreen, AuthSplash } from "./components/AuthScreen";
 import { ChatPanel } from "./components/ChatPanel";
 import { ExecutionInspector } from "./components/ExecutionInspector";
 import { Sidebar } from "./components/Sidebar";
@@ -47,11 +48,6 @@ export default function App() {
   const [conversationId, setConversationId] = useState<string | undefined>();
   const [authChecked, setAuthChecked] = useState(false);
   const [currentUser, setCurrentUser] = useState<string | null>(null);
-  const [loginUsername, setLoginUsername] = useState("");
-  const [loginPassword, setLoginPassword] = useState("");
-  const [loginError, setLoginError] = useState<string | null>(null);
-  const [loginBusy, setLoginBusy] = useState(false);
-  const [authMode, setAuthMode] = useState<"login" | "register">("login");
   const [traceRuns, setTraceRuns] = useState<TraceRun[]>([]);
   const [selectedTraceId, setSelectedTraceId] = useState<string | null>(null);
   const objectUrlsRef = useRef<Set<string>>(new Set());
@@ -106,21 +102,11 @@ export default function App() {
     };
   }, []);
 
-  async function handleLogin(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setLoginBusy(true);
-    setLoginError(null);
-    try {
-      const data = authMode === "register"
-        ? await registerLocal(loginUsername.trim(), loginPassword)
-        : await loginLocal(loginUsername.trim(), loginPassword);
-      setCurrentUser(data.user_id);
-      setLoginPassword("");
-    } catch (error) {
-      setLoginError(error instanceof Error ? error.message : authMode === "register" ? "注册失败，请检查输入。" : "登录失败，请检查用户名和密码。");
-    } finally {
-      setLoginBusy(false);
-    }
+  async function handleAuth(mode: "login" | "register", username: string, password: string) {
+    const data = mode === "register"
+      ? await registerLocal(username, password)
+      : await loginLocal(username, password);
+    setCurrentUser(data.user_id);
   }
 
   async function handleLogout() {
@@ -277,32 +263,11 @@ export default function App() {
   }
 
   if (!authChecked) {
-    return <div className="auth-screen">正在检查登录状态…</div>;
+    return <AuthSplash />;
   }
 
   if (!currentUser) {
-    return (
-      <main className="auth-screen">
-        <form className="auth-card" onSubmit={(event) => void handleLogin(event)}>
-          <div className="welcome-kicker">MED AGENT</div>
-          <h1>{authMode === "register" ? "注册医疗助手" : "登录医疗助手"}</h1>
-          <p>{authMode === "register" ? "创建一个本地测试账号，注册后将自动登录。" : "请输入本地测试账号继续使用。"}</p>
-          <label>
-            用户名
-            <input value={loginUsername} onChange={(event) => setLoginUsername(event.target.value)} autoComplete="username" required />
-          </label>
-          <label>
-            密码
-            <input type="password" value={loginPassword} onChange={(event) => setLoginPassword(event.target.value)} autoComplete={authMode === "register" ? "new-password" : "current-password"} minLength={8} required />
-          </label>
-          {loginError && <div className="auth-error">{loginError}</div>}
-          <button type="submit" disabled={loginBusy}>{loginBusy ? (authMode === "register" ? "注册中…" : "登录中…") : authMode === "register" ? "注册并登录" : "登录"}</button>
-          <button type="button" className="auth-switch" onClick={() => { setAuthMode(authMode === "login" ? "register" : "login"); setLoginError(null); }}>
-            {authMode === "register" ? "已有账号？返回登录" : "没有账号？立即注册"}
-          </button>
-        </form>
-      </main>
-    );
+    return <AuthScreen onSubmit={handleAuth} />;
   }
 
   return (

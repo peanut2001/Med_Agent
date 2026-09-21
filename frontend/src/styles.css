@@ -551,33 +551,333 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, label:has(inp
   .icon-button { width: 37px; height: 37px; }
   .send-button { width: 41px; height: 41px; }
 }
+/* ============================================================
+   登录控制台（深色）——背景全部由 CSS/SVG 绘制，无外部图片请求
+   ============================================================ */
 .auth-screen {
-  min-height: 100vh;
+  --auth-ink: #04100f;
+  --auth-glass: rgba(11, 34, 32, 0.72);
+  --auth-line: rgba(93, 226, 205, 0.16);
+  --auth-line-strong: rgba(93, 226, 205, 0.32);
+  --auth-accent: #2ee6c5;
+  --auth-accent-deep: #0f9e8b;
+  --auth-text: #e7fbf6;
+  --auth-muted: #83a9a2;
+  color-scheme: dark;
+
+  position: relative;
   display: grid;
   place-items: center;
-  padding: 24px;
-  background: var(--canvas);
-  color: var(--text);
+  min-height: 100dvh;
+  padding: 28px 20px;
+  overflow: hidden;
+  color: var(--auth-text);
+  background: var(--auth-ink);
 }
 
+/* ---------- 背景层 ---------- */
+.auth-backdrop { position: absolute; inset: 0; pointer-events: none; }
+
+.auth-backdrop__glow { position: absolute; border-radius: 50%; filter: blur(90px); opacity: 0.55; }
+.auth-backdrop__glow--teal {
+  top: -18%; left: -8%; width: 58vw; height: 58vw; max-width: 780px; max-height: 780px;
+  background: radial-gradient(circle, rgba(46, 230, 197, 0.34), transparent 68%);
+  animation: auth-drift 19s ease-in-out infinite;
+}
+.auth-backdrop__glow--cyan {
+  right: -14%; bottom: -24%; width: 62vw; height: 62vw; max-width: 840px; max-height: 840px;
+  background: radial-gradient(circle, rgba(37, 132, 190, 0.28), transparent 70%);
+  animation: auth-drift 23s ease-in-out infinite reverse;
+}
+
+.auth-backdrop__grid {
+  position: absolute; inset: -2px;
+  background-image:
+    linear-gradient(var(--auth-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--auth-line) 1px, transparent 1px);
+  background-size: 62px 62px;
+  mask-image: radial-gradient(ellipse 78% 68% at 50% 44%, #000 12%, transparent 76%);
+  opacity: 0.5;
+}
+
+.auth-backdrop__ecg { position: absolute; left: 0; bottom: 13%; width: 100%; height: clamp(120px, 20vh, 210px); }
+.auth-backdrop__ecg path { fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.auth-backdrop__ecg-trail { stroke: rgba(46, 230, 197, 0.12); }
+.auth-backdrop__ecg-pulse {
+  stroke: rgba(46, 230, 197, 0.85);
+  filter: drop-shadow(0 0 7px rgba(46, 230, 197, 0.6));
+  stroke-dasharray: 260 1340;
+  animation: auth-ecg-sweep 4.6s linear infinite;
+}
+
+.auth-backdrop__vignette {
+  position: absolute; inset: 0;
+  background:
+    radial-gradient(ellipse 96% 74% at 50% 42%, transparent 34%, rgba(2, 10, 9, 0.82) 100%),
+    linear-gradient(180deg, rgba(2, 10, 9, 0.62), transparent 26%, transparent 70%, rgba(2, 10, 9, 0.72));
+}
+
+@keyframes auth-drift {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+  50% { transform: translate3d(3%, 5%, 0) scale(1.09); }
+}
+@keyframes auth-ecg-sweep {
+  from { stroke-dashoffset: 1600; }
+  to { stroke-dashoffset: 0; }
+}
+
+/* ---------- 卡片 ---------- */
 .auth-card {
-  width: min(100%, 400px);
+  position: relative;
+  z-index: 1;
   display: grid;
-  gap: 14px;
-  padding: 32px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-xl);
-  background: var(--surface);
-  box-shadow: var(--shadow-lg);
+  gap: 18px;
+  width: min(100%, 432px);
+  padding: 30px 32px 26px;
+  border: 1px solid var(--auth-line-strong);
+  border-radius: 24px;
+  background:
+    linear-gradient(160deg, rgba(23, 62, 57, 0.55), transparent 58%),
+    var(--auth-glass);
+  box-shadow:
+    0 32px 80px rgba(0, 0, 0, 0.55),
+    inset 0 1px 0 rgba(150, 255, 236, 0.14);
+  backdrop-filter: blur(22px);
+  animation: auth-card-in 520ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+/* 顶部一道高光描边，强化玻璃质感 */
+.auth-card::before {
+  content: "";
+  position: absolute; top: -1px; left: 12%; right: 12%; height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(46, 230, 197, 0.75), transparent);
 }
 
-.auth-card h1 { margin: 0; font-size: 1.5rem; }
-.auth-card p { margin: 0 0 6px; color: var(--muted); }
-.auth-card label { display: grid; gap: 6px; color: var(--text-soft); font-size: 0.82rem; font-weight: 700; }
-.auth-card input { width: 100%; box-sizing: border-box; padding: 11px 12px; border: 1px solid var(--border-strong); border-radius: 10px; font: inherit; }
-.auth-card button { border: 0; border-radius: 10px; padding: 11px 14px; background: var(--primary); color: white; font: inherit; font-weight: 800; cursor: pointer; }
-.auth-card button:disabled { opacity: 0.6; cursor: wait; }
-.auth-card .auth-switch { padding: 4px 8px; background: transparent; color: var(--primary-deep); font-size: 0.82rem; }
-.auth-card .auth-switch:hover { text-decoration: underline; }
-.auth-error { padding: 10px 12px; border-radius: 10px; background: var(--danger-soft); color: var(--danger); font-size: 0.82rem; }
+@keyframes auth-card-in {
+  from { opacity: 0; transform: translateY(16px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+
+.auth-card__status {
+  display: inline-flex; align-items: center; gap: 8px;
+  justify-self: start;
+  padding: 5px 11px;
+  border: 1px solid var(--auth-line-strong);
+  border-radius: 999px;
+  background: rgba(46, 230, 197, 0.08);
+  color: var(--auth-accent);
+  font-size: 0.68rem; font-weight: 800; letter-spacing: 0.05em;
+}
+.auth-card__pulse {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--auth-accent);
+  box-shadow: 0 0 0 0 rgba(46, 230, 197, 0.55);
+  animation: auth-pulse 1.9s ease-out infinite;
+}
+@keyframes auth-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(46, 230, 197, 0.5); }
+  70% { box-shadow: 0 0 0 9px rgba(46, 230, 197, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(46, 230, 197, 0); }
+}
+
+/* ---------- 品牌区 ---------- */
+.auth-brand { display: flex; gap: 14px; align-items: flex-start; }
+.auth-brand__mark {
+  display: grid; place-items: center; flex: 0 0 auto;
+  width: 50px; height: 50px;
+  border: 1px solid rgba(46, 230, 197, 0.4);
+  border-radius: 15px;
+  background: linear-gradient(145deg, rgba(46, 230, 197, 0.22), rgba(15, 158, 139, 0.1));
+  color: var(--auth-accent);
+  box-shadow: inset 0 1px 0 rgba(160, 255, 238, 0.28), 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+.auth-brand__copy { min-width: 0; }
+.auth-brand__eyebrow { color: var(--auth-accent-deep); font-size: 0.63rem; font-weight: 800; letter-spacing: 0.18em; }
+.auth-brand h1 { margin: 5px 0 6px; font-size: 1.36rem; letter-spacing: -0.02em; line-height: 1.25; }
+.auth-brand p { margin: 0; color: var(--auth-muted); font-size: 0.8rem; line-height: 1.6; }
+
+/* ---------- 登录 / 注册切换 ---------- */
+.auth-tabs {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--auth-line);
+  border-radius: 13px;
+  background: rgba(3, 20, 18, 0.6);
+}
+.auth-tab {
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  min-height: 38px;
+  border: 0; border-radius: 10px;
+  background: transparent;
+  color: var(--auth-muted);
+  font-size: 0.84rem; font-weight: 800;
+  transition: color 180ms ease, background 180ms ease, box-shadow 180ms ease;
+}
+.auth-tab:hover { color: var(--auth-text); }
+.auth-tab.is-active {
+  color: #04211d;
+  background: linear-gradient(140deg, var(--auth-accent), var(--auth-accent-deep));
+  box-shadow: 0 6px 18px rgba(46, 230, 197, 0.26);
+}
+
+/* ---------- 表单 ---------- */
+.auth-form { display: grid; gap: 14px; }
+.auth-field { display: grid; gap: 7px; }
+.auth-field__label { color: var(--auth-muted); font-size: 0.74rem; font-weight: 800; letter-spacing: 0.02em; }
+.auth-field__control {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px;
+  border: 1px solid var(--auth-line);
+  border-radius: 13px;
+  background: rgba(3, 20, 18, 0.66);
+  transition: border-color 180ms ease, box-shadow 180ms ease, background 180ms ease;
+}
+.auth-field__control:focus-within {
+  border-color: rgba(46, 230, 197, 0.6);
+  background: rgba(5, 28, 25, 0.8);
+  box-shadow: 0 0 0 4px rgba(46, 230, 197, 0.13);
+}
+.auth-field__icon { color: var(--auth-muted); transition: color 180ms ease; }
+.auth-field__control:focus-within .auth-field__icon { color: var(--auth-accent); }
+.auth-field input {
+  min-width: 0; padding: 13px 0;
+  border: 0; outline: none;
+  background: transparent;
+  color: var(--auth-text);
+  font-size: 0.92rem;
+}
+.auth-field input::placeholder { color: rgba(131, 169, 162, 0.55); }
+/* 覆盖 Chrome 自动填充的白底 */
+.auth-field input:-webkit-autofill,
+.auth-field input:-webkit-autofill:focus {
+  -webkit-text-fill-color: var(--auth-text);
+  -webkit-box-shadow: 0 0 0 1000px rgba(5, 28, 25, 0.98) inset;
+  caret-color: var(--auth-text);
+}
+.auth-field__reveal {
+  display: grid; place-items: center;
+  width: 30px; height: 30px;
+  border: 0; border-radius: 8px;
+  background: transparent;
+  color: var(--auth-muted);
+  transition: color 160ms ease, background 160ms ease;
+}
+.auth-field__reveal:hover { color: var(--auth-accent); background: rgba(46, 230, 197, 0.12); }
+
+/* ---------- 注册规则清单 ---------- */
+.auth-rules { display: grid; gap: 7px; margin: -2px 0 0; padding: 0; list-style: none; }
+.auth-rules li {
+  display: flex; align-items: center; gap: 8px;
+  color: var(--auth-muted);
+  font-size: 0.73rem;
+  transition: color 200ms ease;
+}
+.auth-rules li svg {
+  flex: 0 0 auto;
+  padding: 2px;
+  border: 1px solid var(--auth-line);
+  border-radius: 50%;
+  color: transparent;
+  transition: color 200ms ease, border-color 200ms ease, background 200ms ease;
+}
+.auth-rules li.is-met { color: var(--auth-accent); }
+.auth-rules li.is-met svg { color: #04211d; border-color: var(--auth-accent); background: var(--auth-accent); }
+.auth-rules code {
+  padding: 0 3px;
+  border-radius: 4px;
+  background: rgba(46, 230, 197, 0.12);
+  font-size: 0.9em;
+}
+
+/* ---------- 错误提示 ---------- */
+.auth-error {
+  display: flex; align-items: flex-start; gap: 9px;
+  padding: 11px 13px;
+  border: 1px solid rgba(255, 138, 138, 0.32);
+  border-radius: 12px;
+  background: rgba(120, 32, 32, 0.28);
+  color: #ffc4c4;
+  font-size: 0.79rem; line-height: 1.55;
+  animation: auth-shake 320ms ease;
+}
+.auth-error svg { flex: 0 0 auto; margin-top: 1px; }
+@keyframes auth-shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-5px); }
+  75% { transform: translateX(5px); }
+}
+
+/* ---------- 提交按钮 ---------- */
+.auth-submit {
+  display: inline-flex; align-items: center; justify-content: center; gap: 9px;
+  min-height: 48px; margin-top: 2px;
+  border: 0; border-radius: 13px;
+  background: linear-gradient(135deg, var(--auth-accent), var(--auth-accent-deep));
+  color: #04211d;
+  font-size: 0.92rem; font-weight: 850; letter-spacing: 0.01em;
+  box-shadow: 0 12px 30px rgba(46, 230, 197, 0.24);
+  transition: transform 160ms ease, box-shadow 160ms ease, filter 160ms ease;
+}
+.auth-submit:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 16px 38px rgba(46, 230, 197, 0.34); filter: brightness(1.06); }
+.auth-submit:active:not(:disabled) { transform: translateY(0); }
+.auth-submit:disabled { opacity: 0.45; box-shadow: none; }
+.auth-spin { animation: auth-rotate 900ms linear infinite; }
+@keyframes auth-rotate { to { transform: rotate(360deg); } }
+
+/* ---------- 底部信任标识 ---------- */
+.auth-trust {
+  display: flex; flex-wrap: wrap; gap: 8px 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--auth-line);
+}
+.auth-trust span {
+  display: inline-flex; align-items: center; gap: 6px;
+  color: var(--auth-muted);
+  font-size: 0.71rem; font-weight: 600;
+}
+.auth-trust svg { color: var(--auth-accent-deep); }
+.auth-disclaimer { margin: -6px 0 0; color: rgba(131, 169, 162, 0.7); font-size: 0.69rem; line-height: 1.6; }
+
+/* ---------- 会话校验过渡页 ---------- */
+.auth-splash {
+  position: relative; z-index: 1;
+  display: grid; justify-items: center; gap: 9px;
+  text-align: center;
+  animation: auth-card-in 420ms ease both;
+}
+.auth-splash__ring {
+  display: grid; place-items: center;
+  width: 56px; height: 56px; margin-bottom: 6px;
+  border: 1px solid var(--auth-line-strong);
+  border-top-color: var(--auth-accent);
+  border-radius: 50%;
+  background: rgba(46, 230, 197, 0.08);
+  color: var(--auth-accent);
+  animation: auth-rotate 1.4s linear infinite;
+}
+.auth-splash__ring svg { animation: auth-rotate 1.4s linear infinite reverse; }
+.auth-splash strong { font-size: 0.95rem; }
+.auth-splash small { color: var(--auth-muted); font-size: 0.77rem; }
+
+@media (max-width: 520px) {
+  .auth-card { padding: 26px 20px 22px; border-radius: 20px; }
+  .auth-brand h1 { font-size: 1.2rem; }
+  .auth-backdrop__ecg { bottom: 8%; }
+}
+
+/* 尊重系统的「减少动态效果」设置 */
+@media (prefers-reduced-motion: reduce) {
+  .auth-backdrop__glow,
+  .auth-backdrop__ecg-pulse,
+  .auth-card,
+  .auth-card__pulse,
+  .auth-error,
+  .auth-splash,
+  .auth-splash__ring,
+  .auth-splash__ring svg,
+  .auth-spin { animation: none; }
+  .auth-backdrop__ecg-pulse { stroke-dasharray: none; stroke: rgba(46, 230, 197, 0.5); }
+}
 .sidebar-user { margin-bottom: 8px; color: var(--muted); font-size: 0.72rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
