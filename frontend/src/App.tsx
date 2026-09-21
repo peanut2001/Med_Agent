@@ -401,9 +401,8 @@ export default function App() {
         if (!silent && traceId) void settleTrace(traceId, queryLabel);
         if (!silent) {
           // 输入框为空时把原问题放回去，避免用户重打；已写新内容则保留新内容。
+          // 停止本身已经由会话里的那条提示说明，这里不再弹状态条。
           setInputValue((current) => current || messageText);
-          setStatusMessage("已暂停等待，可修改后重新发送。");
-          window.setTimeout(() => setStatusMessage(null), 3000);
         }
         return;
       }

@@ -44,7 +44,10 @@
 }
 
 * { box-sizing: border-box; }
-html, body, #root { min-height: 100%; }
+/* 三列外壳靠视口定高，高度链必须是 height 而不是 min-height：
+   min-height 百分比遇到 auto 高度的父级会被当成 auto，内部的
+   100% 就全部失效，输入框会跟着内容往上跑而不是钉在底部。 */
+html, body, #root { height: 100%; min-height: 100%; }
 html { background: var(--canvas); }
 body {
   margin: 0;
@@ -67,12 +70,16 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, label:has(inp
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   width: 100%;
+  /* dvh 不被支持时（部分内嵌 WebView）回退到 vh，否则高度塌成
+     内容高度，整屏内容贴顶、底部留一大片空白。 */
+  height: 100vh;
   height: 100dvh;
   overflow: hidden;
 }
 /* 收起动画不压内容：侧栏保持原宽，整体滑出，由外层 slot 裁切。
    动画列宽会让内部文字一路重排，看起来像被挤扁。 */
 .side-slot {
+  height: 100%;
   overflow: hidden;
   transition: width 280ms cubic-bezier(0.32, 0.72, 0, 1);
 }
@@ -91,7 +98,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, label:has(inp
   flex-direction: column;
   gap: 18px;
   width: var(--sidebar-width);
-  height: 100dvh;
+  height: 100%;
   /* 只有历史列表滚动，品牌区、新对话与底部账号始终可见。 */
   overflow: hidden;
   padding: 18px 14px;
@@ -104,7 +111,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, label:has(inp
   display: grid;
   grid-template-rows: auto auto auto minmax(0, 1fr) auto;
   width: var(--inspector-width);
-  height: 100dvh;
+  height: 100%;
   overflow: hidden;
   border-left: 1px solid var(--border);
 }
@@ -330,19 +337,22 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, label:has(inp
   color: #fff;
   border: 0;
   border-radius: 10px;
-  background: var(--primary-deep);
+  background: var(--primary);
   font-size: 0.84rem;
   font-weight: 600;
   transition: background 150ms ease;
 }
-.new-chat-button:hover { background: #04443e; }
+.new-chat-button:hover { background: var(--primary-hover); }
 
 .chat-panel {
   position: relative;
   display: grid;
+  /* 中间一行吃掉所有剩余高度，输入区才会被压在面板底部；
+     消息少时空白留在消息区里面，而不是把输入框顶上去。 */
   grid-template-rows: auto minmax(0, 1fr) auto;
   min-width: 0;
-  height: 100dvh;
+  height: 100%;
+  min-height: 0;
   overflow: hidden;
 }
 /* 顶栏压成一条 52px 的细横条：左开关 + 右侧状态，中间留空。 */
@@ -362,17 +372,17 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, label:has(inp
   background: none;
   pointer-events: none;
 }
-/* 正文滚到顶部时钻进这层渐变里淡出，两侧图标才始终清晰、不被消息糊住。
-   和 .composer-region 底部那层渐变是一对。 */
-.chat-panel--chatting .chat-header::before {
-  content: "";
-  position: absolute;
-  inset: 0 0 -26px;
-  background: linear-gradient(180deg, var(--surface) 56%, rgba(255, 255, 255, 0));
-  pointer-events: none;
-}
 .chat-panel--chatting .chat-title-row { position: relative; }
-.chat-panel--chatting .panel-toggle { pointer-events: auto; }
+/* 原来这里铺了一整条白色渐变来保证图标可读，代价是滚到顶部的消息
+   被一起抹掉。改成只给两个图标各垫一层毛玻璃底：图标照样清晰，
+   中间整条保持透明，消息从上边缘到下边缘都看得见。 */
+.chat-panel--chatting .panel-toggle {
+  pointer-events: auto;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.82);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
 /* 在线标签已隐藏，改由右侧开关自己顶到行尾。 */
 .chat-panel--chatting .chat-title-row .panel-toggle:last-child { margin-left: auto; }
 /* 给浮空的图标让出高度，首条消息不会一上来就被压住。 */
@@ -424,7 +434,10 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, label:has(inp
 .disclaimer-bar p { margin: 0; line-height: 1.5; }
 .secure-label { display: inline-flex; align-items: center; gap: 5px; color: var(--primary); font-weight: 700; white-space: nowrap; }
 
-.chat-scroll { min-height: 0; overflow: auto; padding: 28px clamp(22px, 4vw, 58px) 32px; scroll-behavior: smooth; }
+/* 行号写死：对话态顶栏是 absolute，不占 in-flow 位置，
+   靠自动排布会让滚动区掉到第一行(auto)、输入区吃掉 1fr 被拉满，
+   输入框就跟着内容停在中间而不是面板底部。 */
+.chat-scroll { grid-row: 2; min-height: 0; overflow: auto; padding: 28px clamp(22px, 4vw, 58px) 32px; scroll-behavior: smooth; }
 /* 欢迎区整块在可视区垂直居中，不再贴顶留下方大片空白。 */
 .welcome-state {
   display: grid;
@@ -473,7 +486,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, label:has(inp
 .message-meta { display: flex; align-items: center; gap: 8px; min-height: 28px; }
 .message--user .message-meta { justify-content: flex-end; }
 .message-avatar { display: grid; place-items: center; width: 28px; height: 28px; color: var(--primary); border: 1px solid var(--border); border-radius: 9px; background: var(--surface); }
-.message--user .message-avatar { color: #fff; border-color: var(--primary); background: var(--primary); }
+.message--user .message-avatar { color: var(--primary); border-color: #c3e3dd; background: var(--primary-soft); }
 .agent-label { max-width: 360px; overflow: hidden; color: var(--text-soft); font-size: 0.74rem; font-weight: 800; text-overflow: ellipsis; white-space: nowrap; }
 .status-label { display: inline-flex; align-items: center; min-height: 21px; padding: 3px 7px; color: var(--info); border-radius: 999px; background: var(--info-soft); font-size: 0.65rem; font-weight: 800; }
 .status-label--progress { color: var(--warning); background: var(--warning-soft); }
@@ -488,7 +501,15 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, label:has(inp
   box-shadow: var(--shadow-sm);
   overflow-wrap: anywhere;
 }
-.message--user .message-surface { color: #fff; border-color: var(--primary-deep); border-radius: var(--radius-lg) 6px var(--radius-lg) var(--radius-lg); background: linear-gradient(145deg, #0b8c7f, var(--primary-deep)); }
+/* 用户气泡走浅青绿 + 深色正文：原来的深绿实底在白底页面上太重，
+   一屏几条就压住了助手回答。 */
+.message--user .message-surface {
+  color: var(--text);
+  border-color: #c3e3dd;
+  border-radius: var(--radius-lg) 6px var(--radius-lg) var(--radius-lg);
+  background: var(--primary-soft);
+  box-shadow: none;
+}
 /* 助手正文脱掉气泡，直接落在面板底色上读；系统提示保留描边，才分得出是状态不是正文。 */
 .message--assistant .message-surface {
   padding: 0;
@@ -497,7 +518,15 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, label:has(inp
   background: none;
   box-shadow: none;
 }
-.message--system .message-surface { border-color: #efcccc; background: #fffafa; box-shadow: none; }
+/* 暂停、失败都走这一条，原来的粉底把普通状态说得太像报错，改成中性底。 */
+.message--system .message-surface {
+  padding: 13px 16px;
+  color: var(--muted);
+  border-color: var(--border);
+  background: var(--surface-subtle);
+  box-shadow: none;
+  font-size: 0.83rem;
+}
 .message-surface > p { margin: 0; line-height: 1.7; white-space: pre-wrap; }
 .thinking-row { display: flex; align-items: center; gap: 11px; color: var(--primary); }
 .thinking-row div { display: grid; gap: 3px; }
@@ -525,9 +554,9 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, label:has(inp
 .message-image-wrap, .image-compare { margin-top: 15px; }
 .message-image-wrap figure, .image-compare figure { margin: 0; }
 .message-image-wrap img, .image-compare img { display: block; width: 100%; max-height: 440px; object-fit: contain; border: 1px solid var(--border); border-radius: 12px; background: #f5f8f7; }
-.message--user .message-image-wrap img { border-color: rgba(255,255,255,0.22); }
+.message--user .message-image-wrap img { border-color: #c3e3dd; }
 .message-image-note { display: flex; align-items: center; gap: 6px; margin: 10px 0 0; color: var(--muted); font-size: 0.68rem; }
-.message--user .message-image-note { color: rgba(255,255,255,0.72); }
+.message--user .message-image-note { color: var(--muted); }
 .image-compare { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .image-compare figure { padding: 7px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface-subtle); }
 .image-compare figcaption { padding: 7px 4px 2px; color: var(--muted); font-size: 0.7rem; font-weight: 700; text-align: center; }
@@ -566,9 +595,10 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, label:has(inp
 .reject-action { color: var(--danger); border-color: #edcaca; background: #fff; }
 .reject-action:hover { background: var(--danger-soft); }
 
-.composer-region { position: relative; padding: 0 22px 18px; background: linear-gradient(180deg, rgba(255,255,255,0), #fff 28%); }
+.composer-region { grid-row: 3; position: relative; padding: 0 22px 18px; background: linear-gradient(180deg, rgba(255,255,255,0), #fff 28%); }
 .composer-context { display: flex; justify-content: center; align-items: center; gap: 6px; padding: 9px; color: var(--muted); font-size: 0.67rem; }
-.composer-shell { width: min(100%, 960px); margin: 0 auto; }
+/* 和 .message-stack 同宽，输入框与消息气泡左右对齐成一条视觉轴。 */
+.composer-shell { width: min(100%, 768px); margin: 0 auto; }
 .composer {
   display: grid;
   grid-template-columns: 42px 42px minmax(0, 1fr) 46px;
@@ -609,7 +639,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, label:has(inp
 .send-button:hover { background: linear-gradient(145deg, #0c8c80, #054f49); transform: translateY(-1px); }
 .send-button--stop { background: linear-gradient(145deg, #c04747, var(--danger)); box-shadow: 0 7px 15px rgba(179, 58, 58, 0.24); }
 .send-button--stop:hover { background: linear-gradient(145deg, #a83a3a, #8c2f2f); }
-.image-draft { display: grid; grid-template-columns: 56px minmax(0, 1fr) 38px; gap: 11px; align-items: center; width: min(100%, 960px); margin: 0 auto 9px; padding: 9px; border: 1px solid var(--border); border-radius: 14px; background: rgba(255,255,255,0.96); box-shadow: var(--shadow-sm); }
+.image-draft { display: grid; grid-template-columns: 56px minmax(0, 1fr) 38px; gap: 11px; align-items: center; width: min(100%, 768px); margin: 0 auto 9px; padding: 9px; border: 1px solid var(--border); border-radius: 14px; background: rgba(255,255,255,0.96); box-shadow: var(--shadow-sm); }
 .image-draft img { width: 56px; height: 48px; object-fit: cover; border-radius: 9px; }
 .image-draft__copy { display: grid; min-width: 0; }
 .image-draft__label { color: var(--primary); font-size: 0.65rem; font-weight: 800; }
@@ -645,7 +675,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, label:has(inp
     bottom: 0;
     z-index: 30;
     width: min(84vw, 304px);
-    height: 100dvh;
+    height: auto;
     box-shadow: var(--shadow-lg);
   }
   .sidebar { left: 0; transform: translateX(-100%); }
@@ -725,6 +755,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, label:has(inp
   position: relative;
   display: grid;
   place-items: center;
+  min-height: 100vh;
   min-height: 100dvh;
   padding: 28px 20px;
   overflow: hidden;
