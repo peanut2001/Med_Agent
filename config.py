@@ -37,7 +37,9 @@ def _positive_float_env(name: str, default: float) -> float:
 # Common LLM configuration
 API_KEY = os.getenv("OPENAI_API_KEY")
 API_BASE = os.getenv("OPENAI_API_BASE", "https://api.yunnet.top/v1")
-MODEL_NAME = os.getenv("MODEL_NAME", "claude-opus-4-8")
+# Default to a model the configured gateway actually serves; the previous
+# default was not available there and failed with model_not_found.
+MODEL_NAME = os.getenv("MODEL_NAME", "gpt-5.6-sol")
 EMBEDDING_MODEL_NAME = os.getenv("EMBEDDING_MODEL_NAME", "qwen3-embedding-8b")
 EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "4096"))
 # 部分模型（如 qwen3-embedding-8b）不支持 matryoshka 降维，
@@ -88,7 +90,14 @@ def create_llm(
         openai_api_key=API_KEY,
         openai_api_base=API_BASE,
         temperature=temperature,
-        streaming=True,
+        # Streaming is off because the gateway reports upstream failures very
+        # differently in the two modes: a non-streaming failure is an HTTP 504,
+        # which the SDK retries, while a streaming failure is an HTTP 200 whose
+        # body carries an error event, which the SDK cannot see and never
+        # retries. Measured on this gateway: 1/3 requests succeeded streaming
+        # with 3 retries, 3/3 without. Nothing here consumes tokens
+        # incrementally (the graph calls invoke()), so this costs no UX.
+        streaming=os.getenv("LLM_STREAMING", "false").lower() in ("1", "true", "yes", "on"),
     )
     if timeout is not None:
         kwargs["request_timeout"] = timeout
@@ -234,28 +243,41 @@ class ValidationConfig:
 
 class GuardrailConfig:
     def __init__(self):
-        self.output_timeout_seconds = _positive_float_env("OUTPUT_GUARDRAIL_TIMEOUT_SECONDS", 5.0)
-        self.output_model_name = os.getenv("OUTPUT_GUARDRAIL_MODEL_NAME", "gpt-4o-mini")
+        # Timeouts are sized for the configured gateway, which has been measured
+        # at 25-40s for a short completion. The previous 5s/10s defaults made
+        # both filters time out on every request, and because they fail closed
+        # that silently blocked all answers.
+        self.output_timeout_seconds = _positive_float_env("OUTPUT_GUARDRAIL_TIMEOUT_SECONDS", 60.0)
+        # Default to the gateway's own model: "gpt-4o-mini" is not served here
+        # and returned model_not_found on every output check.
+        self.output_model_name = os.getenv("OUTPUT_GUARDRAIL_MODEL_NAME", MODEL_NAME)
+        # One retry: the gateway returns sporadic 500s that fail in well under a
+        # second, and because the filters fail closed each one would otherwise
+        # turn into a refused answer.
+        self.retries = _positive_int_env("GUARDRAIL_MAX_RETRIES", 3)
         self.output_llm = create_llm(
             temperature=0.0,
             model=self.output_model_name,
             timeout=self.output_timeout_seconds,
-            max_retries=0,
+            max_retries=self.retries,
         )
         # The input filter runs before anything else on every request, so it
         # needs its own bounded timeout. Without one it inherits the SDK
         # default (600s) and a slow gateway blocks the request thread.
-        self.input_timeout_seconds = _positive_float_env("INPUT_GUARDRAIL_TIMEOUT_SECONDS", 10.0)
+        self.input_timeout_seconds = _positive_float_env("INPUT_GUARDRAIL_TIMEOUT_SECONDS", 60.0)
         self.input_model_name = os.getenv("INPUT_GUARDRAIL_MODEL_NAME", MODEL_NAME)
         self.input_llm = create_llm(
             temperature=0.0,
             model=self.input_model_name,
             timeout=self.input_timeout_seconds,
-            max_retries=0,
+            max_retries=self.retries,
         )
         # When the input filter itself fails, refuse the request rather than
         # letting unchecked text reach the medical agents.
         self.input_fail_open = os.getenv("INPUT_GUARDRAIL_FAIL_OPEN", "false").lower() in ("1", "true", "yes", "on")
+        # Same trade-off on the output side: closed by default, openable when
+        # the reviewer gateway is too unreliable to gate every answer on.
+        self.output_fail_open = os.getenv("OUTPUT_GUARDRAIL_FAIL_OPEN", "false").lower() in ("1", "true", "yes", "on")
 
 class APIConfig:
     def __init__(self):
