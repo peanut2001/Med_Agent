@@ -20,6 +20,10 @@ class TraceAlreadyUsedError(ValueError):
     """Raised only when a pre-created execution trace is activated twice."""
 
 
+class TraceCancelledError(RuntimeError):
+    """Raised at a node boundary once the client asked to stop this run."""
+
+
 NODE_LABELS = {
     "analyze_input": "输入分析与安全检查",
     "route_to_agent": "智能体路由决策",
@@ -37,6 +41,9 @@ NODE_LABELS = {
     "human_validation": "创建人工复核任务",
     "apply_guardrails": "输出安全检查",
 }
+
+
+_FINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
 
 
 def _bounded_env_int(name: str, default: int, minimum: int) -> int:
@@ -82,6 +89,7 @@ class ExecutionTraceStore:
             "started_monotonic": time.monotonic(),
             "finished_at": None,
             "total_duration_ms": None,
+            "cancel_requested": False,
             "nodes": [],
         }
         with self._lock:
@@ -98,6 +106,8 @@ class ExecutionTraceStore:
                 or record["conversation_id"] != conversation_id
             ):
                 raise KeyError("trace_not_found")
+            if record["status"] == "cancelled":
+                raise TraceCancelledError("trace_cancelled")
             if record["status"] != "queued":
                 raise TraceAlreadyUsedError("trace_already_used")
             record["status"] = "running"
@@ -151,11 +161,18 @@ class ExecutionTraceStore:
             record = self._records.get(trace_id)
             if record is None:
                 return
-            record["status"] = status
-            record["finished_at"] = datetime.now(timezone.utc).isoformat()
-            record["total_duration_ms"] = round(
-                (time.monotonic() - record["started_monotonic"]) * 1000, 1
-            )
+            # A run that was cancelled at a node boundary keeps that verdict:
+            # the unwinding exception must not be relabelled as a failure.
+            if record["status"] in _FINAL_STATUSES:
+                return
+            self._finalise_locked(record, status)
+
+    def _finalise_locked(self, record: Dict[str, Any], status: str) -> None:
+        record["status"] = status
+        record["finished_at"] = datetime.now(timezone.utc).isoformat()
+        record["total_duration_ms"] = round(
+            (time.monotonic() - record["started_monotonic"]) * 1000, 1
+        )
 
     def fail_for_user(self, trace_id: Optional[str], *, user_id: str) -> None:
         """Mark an owned preflight trace failed without exposing foreign traces."""
@@ -166,11 +183,29 @@ class ExecutionTraceStore:
             if record is None or record["user_id"] != user_id:
                 return
             if record["status"] in {"queued", "running"}:
-                record["status"] = "failed"
-                record["finished_at"] = datetime.now(timezone.utc).isoformat()
-                record["total_duration_ms"] = round(
-                    (time.monotonic() - record["started_monotonic"]) * 1000, 1
-                )
+                self._finalise_locked(record, "failed")
+
+    def cancel_for_user(self, trace_id: str, *, user_id: str) -> Dict[str, Any]:
+        """Ask an owned run to stop; the graph unwinds at its next node boundary."""
+        with self._lock:
+            record = self._records.get(trace_id)
+            if record is None or record["user_id"] != user_id:
+                raise KeyError("trace_not_found")
+            if record["status"] in _FINAL_STATUSES:
+                # Already done by the time the user hit stop: nothing to unwind.
+                return self._public(record)
+            record["cancel_requested"] = True
+            if record["status"] == "queued":
+                # No node has run yet, so no worker will observe the flag.
+                self._finalise_locked(record, "cancelled")
+            return self._public(record)
+
+    def is_cancel_requested(self, trace_id: Optional[str]) -> bool:
+        if not trace_id:
+            return False
+        with self._lock:
+            record = self._records.get(trace_id)
+            return bool(record and record["cancel_requested"])
 
     def get_for_user(self, trace_id: str, *, user_id: str) -> Dict[str, Any]:
         with self._lock:
@@ -234,6 +269,11 @@ def traced_node(node_id: str, operation: Callable[..., T]) -> Callable[..., T]:
     def wrapper(*args, **kwargs):
         state = args[0] if args and hasattr(args[0], "get") else {}
         trace_id = _active_trace_id.get() or state.get("execution_trace_id")
+        # Checked before start_node so a cancelled run does not sprout a
+        # phantom node the user never actually triggered.
+        if execution_trace_store.is_cancel_requested(trace_id):
+            execution_trace_store.finish(trace_id, status="cancelled")
+            raise TraceCancelledError(node_id)
         event_id = execution_trace_store.start_node(trace_id, node_id) if trace_id else None
         # trace_metadata belongs to exactly one node. Clear any value copied
         # through LangGraph state before invoking the next operation.
@@ -243,12 +283,15 @@ def traced_node(node_id: str, operation: Callable[..., T]) -> Callable[..., T]:
             result = operation(*args, **kwargs)
         except BaseException as exc:
             if trace_id:
+                cancelled = isinstance(exc, TraceCancelledError)
                 execution_trace_store.finish_node(
                     trace_id,
                     event_id,
-                    status="failed",
+                    status="cancelled" if cancelled else "failed",
                     metadata={"error_type": type(exc).__name__},
                 )
+                if cancelled:
+                    execution_trace_store.finish(trace_id, status="cancelled")
             raise
         if trace_id:
             execution_trace_store.finish_node(

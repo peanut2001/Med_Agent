@@ -2,6 +2,7 @@ import {
   Activity,
   CheckCircle2,
   CircleDashed,
+  CircleSlash,
   Clock3,
   GitBranch,
   Route,
@@ -22,8 +23,15 @@ const statusCopy = {
   queued: "排队中",
   running: "执行中",
   completed: "已完成",
-  failed: "失败"
+  failed: "失败",
+  cancelled: "已停止"
 } as const;
+
+function healthCopy(trace: TraceRun) {
+  // 取消已发出但服务端还在收尾当前节点时，状态仍是 running，要如实说明。
+  if (trace.cancel_requested && trace.status === "running") return "正在停止";
+  return statusCopy[trace.status];
+}
 
 function formatDuration(value: number | null) {
   if (value === null) return "运行中";
@@ -64,6 +72,7 @@ function nodeDetail(node: TraceNode) {
 function NodeStatusIcon({ node }: { node: TraceNode }) {
   if (node.status === "completed") return <CheckCircle2 size={17} aria-hidden="true" />;
   if (node.status === "failed") return <XCircle size={17} aria-hidden="true" />;
+  if (node.status === "cancelled") return <CircleSlash size={17} aria-hidden="true" />;
   return <CircleDashed className="spin" size={17} aria-hidden="true" />;
 }
 
@@ -100,7 +109,7 @@ export function ExecutionInspector({
         </div>
         <div className={`trace-health trace-health--${selected?.status || (busy ? "running" : "idle")}`} role="status">
           <span className="status-dot" aria-hidden="true" />
-          {selected ? statusCopy[selected.status] : busy ? "准备中" : "等待调用"}
+          {selected ? healthCopy(selected) : busy ? "准备中" : "等待调用"}
         </div>
       </header>
 
@@ -122,7 +131,7 @@ export function ExecutionInspector({
               title={trace.queryLabel}
             >
               <span>#{index + 1}</span>
-              <small>{trace.status === "running" ? "执行中" : `${trace.nodes.length} 节点`}</small>
+              <small>{trace.status === "queued" || trace.status === "running" ? healthCopy(trace) : `${trace.nodes.length} 节点`}</small>
             </button>
           ))}
         </nav>
@@ -143,10 +152,20 @@ export function ExecutionInspector({
               <code>{selected.trace_id.slice(0, 8)}</code>
             </div>
             {selected.nodes.length === 0 ? (
-              <div className="trace-awaiting">
-                <CircleDashed className="spin" size={19} aria-hidden="true" />
-                <div><strong>等待首个节点回传</strong><span>请求已进入执行队列</span></div>
-              </div>
+              selected.status === "cancelled" || selected.status === "failed" ? (
+                <div className="trace-awaiting trace-awaiting--stopped">
+                  <CircleSlash size={19} aria-hidden="true" />
+                  <div>
+                    <strong>{selected.status === "cancelled" ? "已在首个节点前停止" : "未进入任何节点"}</strong>
+                    <span>本次调用没有产生节点记录</span>
+                  </div>
+                </div>
+              ) : (
+                <div className="trace-awaiting">
+                  <CircleDashed className="spin" size={19} aria-hidden="true" />
+                  <div><strong>等待首个节点回传</strong><span>请求已进入执行队列</span></div>
+                </div>
+              )
             ) : (
               <ol className="trace-timeline">
                 {selected.nodes.map((node, index) => (

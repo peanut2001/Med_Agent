@@ -19,21 +19,22 @@ type MessageListProps = {
   onValidate: (validation: "yes" | "no", comments: string) => Promise<void>;
 };
 
+// 三条描述刻意保持相近长度，换行行数一致，三列底边才齐。
 const starterCards = [
   {
     icon: MessageSquareText,
     title: "描述健康问题",
-    description: "说明症状、持续时间和相关病史，获取结构化参考信息。"
+    description: "说明症状、持续时间与既往病史"
   },
   {
     icon: ImagePlus,
     title: "上传医学影像",
-    description: "支持 PNG、JPG、JPEG，可附上希望重点分析的内容。"
+    description: "支持 PNG、JPG、JPEG 格式"
   },
   {
     icon: Mic,
     title: "使用语音输入",
-    description: "录制问题并自动转写，转写结果仍可编辑后发送。"
+    description: "录音自动转写，可编辑后发送"
   }
 ];
 
@@ -49,22 +50,19 @@ export function MessageList({ messages, onValidate }: MessageListProps) {
     return (
       <div className="welcome-state">
         <div className="welcome-icon" aria-hidden="true">
-          <BrainCircuit size={30} />
+          <BrainCircuit size={34} />
         </div>
-        <div className="welcome-kicker">智能医疗协作空间</div>
         <h2>今天想了解什么健康问题？</h2>
         <p className="welcome-lead">
-          你可以输入文字、上传医学影像或使用语音。系统会自动选择合适的医疗智能体协同处理。
+          输入文字、上传医学影像或使用语音，系统会自动选择合适的医疗智能体协同处理。
         </p>
 
         <div className="starter-grid">
           {starterCards.map(({ icon: Icon, title, description }) => (
             <article key={title} className="starter-card">
-              <span className="starter-card__icon" aria-hidden="true"><Icon size={20} /></span>
-              <div>
-                <h3>{title}</h3>
-                <p>{description}</p>
-              </div>
+              <span className="starter-card__icon" aria-hidden="true"><Icon size={19} /></span>
+              <h3>{title}</h3>
+              <p>{description}</p>
             </article>
           ))}
         </div>
@@ -125,8 +123,20 @@ export function MessageList({ messages, onValidate }: MessageListProps) {
                 </div>
               ) : message.resultImage ? (
                 <div className="message-image-wrap">
-                  <img src={message.resultImage} alt="分析结果图像" />
+                  {/* 结果图是有保留期的临时文件，历史回放时可能已被清理。 */}
+                  <img
+                    src={message.resultImage}
+                    alt="分析结果图像"
+                    onError={(event) => { event.currentTarget.style.display = "none"; }}
+                  />
                 </div>
+              ) : null}
+
+              {message.imageOmitted && !message.imagePreview ? (
+                <p className="message-image-note">
+                  <ImagePlus size={13} aria-hidden="true" />
+                  该消息包含一张上传图像，历史记录不保存原图。
+                </p>
               ) : null}
 
               {message.role === "assistant" && !isPending ? (

@@ -10,6 +10,9 @@ export default defineConfig(({ mode }) => {
     server: {
       host: "0.0.0.0",
       port: 5173,
+      // 端口被占就直接报错，不再自动退到 5174/5175：
+      // 静默换端口会留下多个 dev server，页面连的还是已经停掉的那个。
+      strictPort: true,
       proxy: {
         "/chat": backendTarget,
         "/upload": backendTarget,

@@ -1,11 +1,35 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { createExecutionTrace, getCurrentUser, getExecutionTrace, loginLocal, registerLocal, logoutLocal, sendChat, uploadImage, validateMedicalOutput } from "./api/client";
+import {
+  cancelExecutionTrace,
+  createExecutionTrace,
+  deleteConversation,
+  getConversationMessages,
+  getCurrentUser,
+  getExecutionTrace,
+  listConversations,
+  loginLocal,
+  registerLocal,
+  logoutLocal,
+  renameConversation,
+  sendChat,
+  SERVICE_UNAVAILABLE,
+  uploadImage,
+  validateMedicalOutput
+} from "./api/client";
 import { AuthScreen, AuthSplash } from "./components/AuthScreen";
 import { ChatPanel } from "./components/ChatPanel";
 import { ExecutionInspector } from "./components/ExecutionInspector";
 import { Sidebar } from "./components/Sidebar";
 import { useSpeechRecorder } from "./hooks/useSpeechRecorder";
-import type { AgentResponse, ChatMessage, ExecutionTrace, ImageDraft, TraceRun } from "./types";
+import type {
+  AgentResponse,
+  ChatMessage,
+  ConversationSummary,
+  ExecutionTrace,
+  ImageDraft,
+  StoredMessage,
+  TraceRun
+} from "./types";
 
 function createId(prefix: string) {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -39,6 +63,21 @@ function createSystemMessage(content: string): ChatMessage {
   };
 }
 
+// 历史记录只保存文本与结果图路径：上传的原图是临时文件，不回放。
+// 复核按钮也不还原，审核状态存在服务端内存里，重放会得到失效的请求。
+function toChatMessage(stored: StoredMessage): ChatMessage {
+  return {
+    id: `stored-${stored.message_id}`,
+    role: stored.role,
+    agent: stored.agent || undefined,
+    statusLabel: stored.status_label || undefined,
+    content: stored.content,
+    resultImage: stored.result_image,
+    imageOmitted: stored.has_image,
+    requiresValidation: false
+  };
+}
+
 function createStoppedMessage(): ChatMessage {
   return {
     id: createId("stopped"),
@@ -60,14 +99,18 @@ export default function App() {
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [conversationId, setConversationId] = useState<string | undefined>();
   const [authChecked, setAuthChecked] = useState(false);
+  const [bootstrapNotice, setBootstrapNotice] = useState<string | null>(null);
   const [currentUser, setCurrentUser] = useState<string | null>(null);
   const [traceRuns, setTraceRuns] = useState<TraceRun[]>([]);
   const [selectedTraceId, setSelectedTraceId] = useState<string | null>(null);
+  const [conversations, setConversations] = useState<ConversationSummary[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
   // 窄屏下两侧改为抽屉，默认收起，避免一进来就盖住会话区。
   const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth > 1040);
   const [inspectorOpen, setInspectorOpen] = useState(() => window.innerWidth > 1180);
   const objectUrlsRef = useRef<Set<string>>(new Set());
   const abortRef = useRef<AbortController | null>(null);
+  const activeTraceRef = useRef<string | null>(null);
 
   function upsertTrace(trace: ExecutionTrace, queryLabel?: string) {
     setTraceRuns((current) => {
@@ -80,6 +123,30 @@ export default function App() {
         ? current.map((item) => item.trace_id === trace.trace_id ? next : item)
         : [...current, next];
     });
+  }
+
+  // 只 abort 本地 fetch 的话服务端会把整张图跑完，所以暂停必须先落到服务端。
+  function abortRun(reason?: string) {
+    const traceId = activeTraceRef.current;
+    if (traceId) {
+      activeTraceRef.current = null;
+      cancelExecutionTrace(traceId).catch(() => undefined);
+    }
+    abortRef.current?.abort(reason);
+  }
+
+  // 服务端要跑完当前节点才落终态，补拉到终态为止再定格面板。
+  async function settleTrace(traceId: string, queryLabel: string) {
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      try {
+        const trace = await getExecutionTrace(traceId);
+        upsertTrace(trace, queryLabel);
+        if (trace.status !== "running" && trace.status !== "queued") return;
+      } catch {
+        return;
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, 500));
+    }
   }
 
   const recorder = useSpeechRecorder({
@@ -107,8 +174,17 @@ export default function App() {
 
   useEffect(() => {
     void getCurrentUser()
-      .then((data) => setCurrentUser(data.user_id))
-      .catch(() => setCurrentUser(null))
+      .then((data) => {
+        setCurrentUser(data.user_id);
+        setBootstrapNotice(null);
+      })
+      .catch((error: unknown) => {
+        setCurrentUser(null);
+        // 未登录是正常路径，只有真的连不上服务才需要在登录页解释一句。
+        if (error instanceof Error && error.name === SERVICE_UNAVAILABLE) {
+          setBootstrapNotice(error.message);
+        }
+      })
       .finally(() => setAuthChecked(true));
   }, []);
 
@@ -119,6 +195,80 @@ export default function App() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!currentUser) {
+      setConversations([]);
+      return;
+    }
+    setHistoryLoading(true);
+    void listConversations()
+      .then(setConversations)
+      .catch((error) => console.error("Failed to load conversations:", error))
+      .finally(() => setHistoryLoading(false));
+  }, [currentUser]);
+
+  // 回答落库后标题与排序才是新的，所以每轮结束都重新拉一次列表。
+  function refreshConversations() {
+    void listConversations()
+      .then(setConversations)
+      .catch((error) => console.error("Failed to refresh conversations:", error));
+  }
+
+  function flashStatus(message: string) {
+    setStatusMessage(message);
+    window.setTimeout(() => setStatusMessage(null), 3000);
+  }
+
+  async function handleSelectConversation(conversationIdToOpen: string) {
+    if (conversationIdToOpen === conversationId) return;
+
+    abortRun(RESET_REASON);
+    objectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+    objectUrlsRef.current.clear();
+    setImageDraft(null);
+    setInputValue("");
+    // 执行轨迹只存在服务端内存中，历史会话没有可回放的调用链。
+    setTraceRuns([]);
+    setSelectedTraceId(null);
+    setMessages([]);
+    setConversationId(conversationIdToOpen);
+    if (window.innerWidth <= 1040) setSidebarOpen(false);
+
+    try {
+      const stored = await getConversationMessages(conversationIdToOpen);
+      setMessages(stored.map(toChatMessage));
+    } catch (error) {
+      console.error("Failed to open conversation:", error);
+      setMessages([createSystemMessage("载入历史对话失败，请稍后重试。")]);
+    }
+  }
+
+  async function handleRenameConversation(targetId: string, title: string) {
+    const snapshot = conversations;
+    setConversations((current) => current.map(
+      (item) => item.conversation_id === targetId ? { ...item, title } : item
+    ));
+    try {
+      await renameConversation(targetId, title);
+    } catch (error) {
+      console.error("Failed to rename conversation:", error);
+      setConversations(snapshot);
+      flashStatus("重命名失败，请稍后重试。");
+    }
+  }
+
+  async function handleDeleteConversation(targetId: string) {
+    try {
+      await deleteConversation(targetId);
+    } catch (error) {
+      console.error("Failed to delete conversation:", error);
+      flashStatus("删除失败，请稍后重试。");
+      return;
+    }
+    setConversations((current) => current.filter((item) => item.conversation_id !== targetId));
+    if (targetId === conversationId) handleNewConversation();
+  }
+
   async function handleAuth(mode: "login" | "register", username: string, password: string) {
     const data = mode === "register"
       ? await registerLocal(username, password)
@@ -127,7 +277,7 @@ export default function App() {
   }
 
   async function handleLogout() {
-    abortRef.current?.abort(RESET_REASON);
+    abortRun(RESET_REASON);
     await logoutLocal();
     setCurrentUser(null);
     setConversationId(undefined);
@@ -158,7 +308,7 @@ export default function App() {
   }
 
   function handleNewConversation() {
-    abortRef.current?.abort(RESET_REASON);
+    abortRun(RESET_REASON);
     objectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
     objectUrlsRef.current.clear();
     setImageDraft(null);
@@ -171,7 +321,7 @@ export default function App() {
   }
 
   function handleStop() {
-    abortRef.current?.abort();
+    abortRun();
   }
 
   async function handleSubmit() {
@@ -205,6 +355,7 @@ export default function App() {
     try {
       const initialTrace = await createExecutionTrace(conversationId, controller.signal);
       traceId = initialTrace.trace_id;
+      activeTraceRef.current = traceId;
       const requestConversationId = initialTrace.conversation_id;
       setConversationId(requestConversationId);
       setSelectedTraceId(traceId);
@@ -212,15 +363,19 @@ export default function App() {
 
       polling = true;
       pollingPromise = (async () => {
+        let consecutiveErrors = 0;
         while (polling) {
           await new Promise((resolve) => window.setTimeout(resolve, 300));
           if (!polling || !traceId || controller.signal.aborted) break;
           try {
             const liveTrace = await getExecutionTrace(traceId, controller.signal);
             upsertTrace(liveTrace, queryLabel);
-            if (liveTrace.status === "completed" || liveTrace.status === "failed") break;
+            consecutiveErrors = 0;
+            if (liveTrace.status !== "queued" && liveTrace.status !== "running") break;
           } catch {
-            break;
+            // 一次网络抖动不该让面板永远停在「执行中」，连续失败才放弃轮询。
+            consecutiveErrors += 1;
+            if (consecutiveErrors >= 3) break;
           }
         }
       })();
@@ -234,6 +389,7 @@ export default function App() {
 
       setMessages((current) => current.filter((item) => item.id !== "thinking").concat(assistantMessage));
       setImageDraft(null);
+      refreshConversations();
     } catch (error) {
       if (controller.signal.aborted) {
         const silent = controller.signal.reason === RESET_REASON;
@@ -241,6 +397,8 @@ export default function App() {
           const remaining = current.filter((item) => item.id !== "thinking");
           return silent ? remaining : remaining.concat(createStoppedMessage());
         });
+        // 取消已经发给服务端，这里把它收尾后的真实停点补回面板。
+        if (!silent && traceId) void settleTrace(traceId, queryLabel);
         if (!silent) {
           // 输入框为空时把原问题放回去，避免用户重打；已写新内容则保留新内容。
           setInputValue((current) => current || messageText);
@@ -263,6 +421,7 @@ export default function App() {
       polling = false;
       if (pollingPromise) await pollingPromise;
       if (abortRef.current === controller) abortRef.current = null;
+      if (activeTraceRef.current === traceId) activeTraceRef.current = null;
       setBusy(false);
     }
   }
@@ -297,6 +456,7 @@ export default function App() {
         .filter((item) => item.id !== waitingMessage.id)
         .map((item) => item.validationId === validationId ? { ...item, requiresValidation: false } : item)
         .concat(validationMessage));
+      refreshConversations();
     } catch (error) {
       console.error("Validation submission failed:", error);
       const message = error instanceof Error ? error.message : "验证提交失败，请重试。";
@@ -309,7 +469,7 @@ export default function App() {
   }
 
   if (!currentUser) {
-    return <AuthScreen onSubmit={handleAuth} />;
+    return <AuthScreen onSubmit={handleAuth} notice={bootstrapNotice} />;
   }
 
   const shellClassName = [
@@ -320,7 +480,19 @@ export default function App() {
 
   return (
     <div className={shellClassName}>
-      <Sidebar onNewConversation={handleNewConversation} onLogout={() => void handleLogout()} currentUser={currentUser} />
+      <div className="side-slot sidebar-slot">
+        <Sidebar
+          onNewConversation={handleNewConversation}
+          onLogout={() => void handleLogout()}
+          currentUser={currentUser}
+          conversations={conversations}
+          activeConversationId={conversationId}
+          historyLoading={historyLoading}
+          onSelectConversation={(id) => void handleSelectConversation(id)}
+          onRenameConversation={(id, title) => void handleRenameConversation(id, title)}
+          onDeleteConversation={(id) => void handleDeleteConversation(id)}
+        />
+      </div>
       <button
         type="button"
         className="drawer-scrim"
@@ -349,13 +521,15 @@ export default function App() {
         onToggleSidebar={() => setSidebarOpen((current) => !current)}
         onToggleInspector={() => setInspectorOpen((current) => !current)}
       />
-      <ExecutionInspector
-        traces={traceRuns}
-        selectedTraceId={selectedTraceId}
-        busy={busy}
-        conversationId={conversationId}
-        onSelect={setSelectedTraceId}
-      />
+      <div className="side-slot inspector-slot">
+        <ExecutionInspector
+          traces={traceRuns}
+          selectedTraceId={selectedTraceId}
+          busy={busy}
+          conversationId={conversationId}
+          onSelect={setSelectedTraceId}
+        />
+      </div>
     </div>
   );
 }

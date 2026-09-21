@@ -26,7 +26,12 @@ from agents.artifacts import (
     cleanup_expired_artifacts,
     resolve_private_artifact,
 )
-from agents.execution_trace import TraceAlreadyUsedError, execution_trace_store
+from agents.conversation_store import conversation_store
+from agents.execution_trace import (
+    TraceAlreadyUsedError,
+    TraceCancelledError,
+    execution_trace_store,
+)
 from agents.security import CurrentUser, get_current_user, resolve_conversation_id
 from agents.validation_store import validation_store
 from agents.local_auth import local_auth_store
@@ -159,6 +164,10 @@ class LocalRegisterRequest(BaseModel):
     username: str
     password: str
 
+
+class ConversationRenameRequest(BaseModel):
+    title: str
+
 @app.get("/")
 async def index():
     """Serve the React frontend built by Vite."""
@@ -246,6 +255,100 @@ def _agent_response_payload(response_data: dict, conversation_id: str) -> dict:
     return result
 
 
+# Mirrors the placeholder the frontend shows for an image sent without text.
+IMAGE_ONLY_QUERY = "已上传 1 张待分析图像，请系统直接开始识别。"
+
+
+def _record_turn(
+    *,
+    user_id: str,
+    conversation_id: str,
+    query: str,
+    payload: dict,
+    has_image: bool = False,
+) -> None:
+    """Persist one request/answer pair so the sidebar can replay the thread.
+
+    History is a convenience layer: a storage failure must never discard an
+    answer the user is already waiting for, so it is logged server-side and
+    the response still goes out.
+    """
+    try:
+        conversation_store.append(
+            user_id=user_id,
+            conversation_id=conversation_id,
+            role="user",
+            content=query or (IMAGE_ONLY_QUERY if has_image else ""),
+            has_image=has_image,
+        )
+        conversation_store.append(
+            user_id=user_id,
+            conversation_id=conversation_id,
+            role="assistant",
+            content=payload.get("response") or "",
+            agent=payload.get("agent"),
+            status_label="已返回",
+            result_image=payload.get("result_image"),
+        )
+    except Exception:
+        import traceback
+        traceback.print_exc()
+
+
+@app.get("/conversations")
+def list_conversations(current_user: CurrentUser = Depends(get_current_user)):
+    """List the signed-in user's saved threads, most recently used first."""
+    return {"conversations": conversation_store.list_for_user(current_user.user_id)}
+
+
+@app.get("/conversations/{conversation_id}/messages")
+def get_conversation_messages(
+    conversation_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    try:
+        messages = conversation_store.get_messages(
+            conversation_id, user_id=current_user.user_id
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail="Conversation belongs to another user") from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Conversation not found") from exc
+    return {"conversation_id": conversation_id, "messages": messages}
+
+
+@app.patch("/conversations/{conversation_id}")
+def rename_conversation(
+    conversation_id: str,
+    request: ConversationRenameRequest,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    try:
+        return conversation_store.rename(
+            conversation_id, user_id=current_user.user_id, title=request.title
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail="Conversation belongs to another user") from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Conversation not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Title must not be empty") from exc
+
+
+@app.delete("/conversations/{conversation_id}")
+def delete_conversation(
+    conversation_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    try:
+        conversation_store.delete(conversation_id, user_id=current_user.user_id)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail="Conversation belongs to another user") from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Conversation not found") from exc
+    return {"status": "deleted", "conversation_id": conversation_id}
+
+
 @app.post("/traces")
 def create_execution_trace(
     request: TraceStartRequest,
@@ -278,6 +381,21 @@ def get_execution_trace(
     except KeyError:
         raise HTTPException(status_code=404, detail="Execution trace not found")
 
+
+@app.post("/traces/{trace_id}/cancel")
+def cancel_execution_trace(
+    trace_id: str,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    """Ask a running graph to unwind at its next node boundary."""
+    try:
+        return execution_trace_store.cancel_for_user(
+            trace_id, user_id=current_user.user_id
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Execution trace not found")
+
+
 @app.post("/chat")
 async def chat(
     request: QueryRequest, 
@@ -305,11 +423,21 @@ async def chat(
         response.set_cookie(key="session_id", value=session_id, httponly=True, samesite="lax")
         response.set_cookie(key="conversation_id", value=conversation_id, httponly=True, samesite="lax")
 
-        return _agent_response_payload(response_data, conversation_id)
+        payload = _agent_response_payload(response_data, conversation_id)
+        _record_turn(
+            user_id=current_user.user_id,
+            conversation_id=conversation_id,
+            query=request.query,
+            payload=payload,
+        )
+        return payload
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Execution trace not found") from exc
     except TraceAlreadyUsedError as exc:
         raise HTTPException(status_code=409, detail="Execution trace has already been used") from exc
+    except TraceCancelledError as exc:
+        # The user hit stop; this is an expected unwind, not a server fault.
+        raise HTTPException(status_code=409, detail="Execution trace was cancelled") from exc
     except Exception:
         # Log the cause server-side; the client gets a generic message so
         # gateway URLs, model names and file paths are not leaked.
@@ -381,11 +509,22 @@ async def upload_image(
         response.set_cookie(key="session_id", value=session_id, httponly=True, samesite="lax")
         response.set_cookie(key="conversation_id", value=conversation_id, httponly=True, samesite="lax")
 
-        return _agent_response_payload(response_data, conversation_id)
+        payload = _agent_response_payload(response_data, conversation_id)
+        _record_turn(
+            user_id=current_user.user_id,
+            conversation_id=conversation_id,
+            query=text,
+            payload=payload,
+            has_image=True,
+        )
+        return payload
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Execution trace not found") from exc
     except TraceAlreadyUsedError as exc:
         raise HTTPException(status_code=409, detail="Execution trace has already been used") from exc
+    except TraceCancelledError as exc:
+        # The user hit stop; this is an expected unwind, not a server fault.
+        raise HTTPException(status_code=409, detail="Execution trace was cancelled") from exc
     except Exception:
         import traceback
         traceback.print_exc()
@@ -427,7 +566,7 @@ def validate_medical_output(
         )
 
         if record.status == 'approved':
-            return {
+            result = {
                 "status": "validated",
                 "message": "**Output confirmed by human validator:**",
                 "response": record.original_output,
@@ -435,7 +574,7 @@ def validate_medical_output(
                 "conversation_id": conversation_id,
             }
         else:
-            return {
+            result = {
                 "status": "rejected",
                 "comments": comments,
                 "message": "**Output requires further review:**",
@@ -443,6 +582,24 @@ def validate_medical_output(
                 "validation_id": validation_id,
                 "conversation_id": conversation_id,
             }
+
+        # Same joining rule the chat panel uses, so replayed history matches
+        # what the user saw live.
+        try:
+            conversation_store.append(
+                user_id=current_user.user_id,
+                conversation_id=conversation_id,
+                role="assistant",
+                content="\n\n".join(
+                    part for part in (result["message"], result["response"]) if part
+                ),
+                agent="HUMAN_VALIDATED",
+                status_label="已确认" if record.status == 'approved' else "需复查",
+            )
+        except Exception:
+            import traceback
+            traceback.print_exc()
+        return result
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail="Validation does not belong to this user or conversation") from exc
     except KeyError as exc:

@@ -11,7 +11,7 @@ export type AgentResponse = {
   execution_trace?: ExecutionTrace;
 };
 
-export type TraceNodeStatus = "running" | "completed" | "failed";
+export type TraceNodeStatus = "running" | "completed" | "failed" | "cancelled";
 
 export type TraceNode = {
   event_id: string;
@@ -26,10 +26,11 @@ export type TraceNode = {
 export type ExecutionTrace = {
   trace_id: string;
   conversation_id: string;
-  status: "queued" | "running" | "completed" | "failed";
+  status: "queued" | "running" | "completed" | "failed" | "cancelled";
   started_at: string;
   finished_at: string | null;
   total_duration_ms: number | null;
+  cancel_requested: boolean;
   nodes: TraceNode[];
 };
 
@@ -56,6 +57,8 @@ export type ChatMessage = {
   content: string;
   imagePreview?: string | null;
   resultImage?: string | null;
+  /** 历史回放时为真：这条消息原本带图，但上传的原图不做持久化。 */
+  imageOmitted?: boolean;
   requiresValidation?: boolean;
   validationId?: string | null;
 };
@@ -63,4 +66,24 @@ export type ChatMessage = {
 export type ImageDraft = {
   file: File;
   previewUrl: string;
+};
+
+export type ConversationSummary = {
+  conversation_id: string;
+  title: string;
+  created_at: number;
+  updated_at: number;
+  message_count: number;
+};
+
+/** 后端持久化的历史消息，字段与 conversation_store 表保持一致。 */
+export type StoredMessage = {
+  message_id: number;
+  role: "user" | "assistant" | "system";
+  agent: string | null;
+  status_label: string | null;
+  content: string;
+  result_image: string | null;
+  has_image: boolean;
+  created_at: number;
 };

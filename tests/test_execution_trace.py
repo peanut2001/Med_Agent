@@ -81,6 +81,56 @@ def test_owned_preflight_trace_can_fail_without_touching_foreign_trace():
     assert store.get_for_user(trace_id, user_id="user-a")["status"] == "failed"
 
 
+def test_cancel_stops_the_graph_at_the_next_node_boundary(monkeypatch):
+    store = tracing.ExecutionTraceStore()
+    monkeypatch.setattr(tracing, "execution_trace_store", store)
+    trace = store.create(user_id="user-a", conversation_id="conversation-a")
+    trace_id = trace["trace_id"]
+    store.activate(trace_id, user_id="user-a", conversation_id="conversation-a")
+
+    state = tracing.traced_node("analyze_input", lambda s: s)(
+        {"execution_trace_id": trace_id}
+    )
+    store.cancel_for_user(trace_id, user_id="user-a")
+
+    with pytest.raises(tracing.TraceCancelledError):
+        tracing.traced_node("route_to_agent", lambda s: s)(state)
+    # The unwinding request handler still reports failure; cancel must win.
+    store.finish(trace_id, status="failed")
+    snapshot = store.get_for_user(trace_id, user_id="user-a")
+
+    assert snapshot["status"] == "cancelled"
+    assert snapshot["total_duration_ms"] is not None
+    # The node that never ran leaves no phantom entry behind.
+    assert [node["node_id"] for node in snapshot["nodes"]] == ["analyze_input"]
+
+
+def test_cancel_before_activation_finalises_without_a_worker():
+    store = tracing.ExecutionTraceStore()
+    trace = store.create(user_id="user-a", conversation_id="conversation-a")
+    trace_id = trace["trace_id"]
+
+    assert store.cancel_for_user(trace_id, user_id="user-a")["status"] == "cancelled"
+    with pytest.raises(tracing.TraceCancelledError):
+        store.activate(trace_id, user_id="user-a", conversation_id="conversation-a")
+
+
+def test_cancel_hides_foreign_traces_and_spares_finished_runs():
+    store = tracing.ExecutionTraceStore()
+    trace = store.create(user_id="user-a", conversation_id="conversation-a")
+    trace_id = trace["trace_id"]
+
+    with pytest.raises(KeyError):
+        store.cancel_for_user(trace_id, user_id="user-b")
+
+    store.activate(trace_id, user_id="user-a", conversation_id="conversation-a")
+    store.finish(trace_id, status="completed")
+    snapshot = store.cancel_for_user(trace_id, user_id="user-a")
+
+    assert snapshot["status"] == "completed"
+    assert snapshot["cancel_requested"] is False
+
+
 def test_reusing_trace_raises_specific_error():
     store = tracing.ExecutionTraceStore()
     trace = store.create(user_id="user-a", conversation_id="conversation-a")

@@ -36,6 +36,7 @@ data/qdrant_db/
 data/docs_db/
 data/parsed_docs/
 data/local_auth.db
+data/conversations.db
 data/backup_*/
 data/failed_ingest_*/
 uploads/

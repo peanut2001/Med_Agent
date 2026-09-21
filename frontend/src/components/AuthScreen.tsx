@@ -21,6 +21,8 @@ type AuthMode = "login" | "register";
 
 type AuthScreenProps = {
   onSubmit: (mode: AuthMode, username: string, password: string) => Promise<void>;
+  /** 启动时连不上服务的说明，表单自身的报错优先级更高。 */
+  notice?: string | null;
 };
 
 // 与后端 agents/local_auth.py 的校验规则保持一致，避免前端放行后端拒绝。
@@ -62,7 +64,7 @@ function AuthBrand({ subtitle }: { subtitle: string }) {
       </div>
       <div className="auth-brand__copy">
         <span className="auth-brand__eyebrow">DOLPHIN CLINICAL AI</span>
-        <h1>海豚医疗智能助手</h1>
+        <h1>多智能体医疗助手</h1>
         <p>{subtitle}</p>
       </div>
     </div>
@@ -85,7 +87,7 @@ export function AuthSplash() {
   );
 }
 
-export function AuthScreen({ onSubmit }: AuthScreenProps) {
+export function AuthScreen({ onSubmit, notice }: AuthScreenProps) {
   const [mode, setMode] = useState<AuthMode>("login");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -214,10 +216,10 @@ export function AuthScreen({ onSubmit }: AuthScreenProps) {
             </ul>
           )}
 
-          {error && (
+          {(error || notice) && (
             <div className="auth-error" role="alert">
               <AlertCircle size={16} aria-hidden="true" />
-              <span>{error}</span>
+              <span>{error || notice}</span>
             </div>
           )}
 
