@@ -1,4 +1,5 @@
-﻿import type { ChangeEvent, KeyboardEvent } from "react";
+﻿import { useRef } from "react";
+import type { ChangeEvent, KeyboardEvent } from "react";
 import { ImagePlus, Loader2, Mic, SendHorizontal, Square, X } from "lucide-react";
 import type { ImageDraft } from "../types";
 
@@ -12,6 +13,7 @@ type ComposerProps = {
   onImageChange: (file: File) => void;
   onImageRemove: () => void;
   onSubmit: () => void;
+  onStop: () => void;
   onVoiceToggle: () => void;
 };
 
@@ -32,8 +34,10 @@ export function Composer({
   onImageChange,
   onImageRemove,
   onSubmit,
+  onStop,
   onVoiceToggle
 }: ComposerProps) {
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const voiceBusy = recorderState === "transcribing";
   const canSubmit = !busy && (!!value.trim() || !!imageDraft);
 
@@ -41,6 +45,19 @@ export function Composer({
     const file = event.target.files?.[0];
     if (file) onImageChange(file);
     event.target.value = "";
+    // 选完文件后焦点会落在文件控件上，交还给输入框以便继续打字。
+    textareaRef.current?.focus();
+  }
+
+  // 发送与暂停都会把焦点带到按钮上，手动交还输入框，保证可以连续输入。
+  function submitAndKeepFocus() {
+    onSubmit();
+    textareaRef.current?.focus();
+  }
+
+  function stopAndKeepFocus() {
+    onStop();
+    textareaRef.current?.focus();
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -93,27 +110,37 @@ export function Composer({
           <label className="sr-only" htmlFor="medical-message">输入医疗问题</label>
           <textarea
             id="medical-message"
+            ref={textareaRef}
             value={value}
             onChange={(event) => onChange(event.target.value)}
             onKeyDown={handleKeyDown}
-            disabled={busy}
             rows={1}
             placeholder="描述你的症状、检查结果，或结合影像提出问题…"
-            aria-describedby="composer-shortcut"
           />
-          <span id="composer-shortcut" className="keyboard-hint">Enter 发送 · Shift + Enter 换行</span>
         </div>
 
-        <button
-          className="send-button"
-          type="button"
-          onClick={onSubmit}
-          disabled={!canSubmit}
-          aria-label={busy ? "正在发送" : "发送消息"}
-          title="发送消息"
-        >
-          {busy ? <Loader2 className="spin" size={20} /> : <SendHorizontal size={20} />}
-        </button>
+        {busy ? (
+          <button
+            className="send-button send-button--stop"
+            type="button"
+            onClick={stopAndKeepFocus}
+            aria-label="暂停本次回答"
+            title="暂停本次回答"
+          >
+            <Square size={17} fill="currentColor" />
+          </button>
+        ) : (
+          <button
+            className="send-button"
+            type="button"
+            onClick={submitAndKeepFocus}
+            disabled={!canSubmit}
+            aria-label="发送消息"
+            title="发送消息"
+          >
+            <SendHorizontal size={20} />
+          </button>
+        )}
       </div>
 
       {recorderState === "recording" ? (

@@ -42,24 +42,31 @@ export async function logoutLocal(): Promise<void> {
   await fetch("/auth/logout", { method: "POST", credentials: "include" });
 }
 
-export async function createExecutionTrace(conversationId?: string): Promise<ExecutionTrace> {
+export async function createExecutionTrace(conversationId?: string, signal?: AbortSignal): Promise<ExecutionTrace> {
   const response = await fetch("/traces", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     credentials: "include",
-    body: JSON.stringify({ conversation_id: conversationId })
+    body: JSON.stringify({ conversation_id: conversationId }),
+    signal
   });
   return readJson<ExecutionTrace>(response);
 }
 
-export async function getExecutionTrace(traceId: string): Promise<ExecutionTrace> {
+export async function getExecutionTrace(traceId: string, signal?: AbortSignal): Promise<ExecutionTrace> {
   const response = await fetch(`/traces/${encodeURIComponent(traceId)}`, {
-    credentials: "include"
+    credentials: "include",
+    signal
   });
   return readJson<ExecutionTrace>(response);
 }
 
-export async function sendChat(query: string, conversationId?: string, traceId?: string): Promise<AgentResponse> {
+export async function sendChat(
+  query: string,
+  conversationId?: string,
+  traceId?: string,
+  signal?: AbortSignal
+): Promise<AgentResponse> {
   const response = await fetch("/chat", {
     method: "POST",
     headers: {
@@ -71,13 +78,20 @@ export async function sendChat(query: string, conversationId?: string, traceId?:
       conversation_id: conversationId,
       trace_id: traceId
     }),
-    credentials: "include"
+    credentials: "include",
+    signal
   });
 
   return readJson<AgentResponse>(response);
 }
 
-export async function uploadImage(text: string, image: File, conversationId?: string, traceId?: string): Promise<AgentResponse> {
+export async function uploadImage(
+  text: string,
+  image: File,
+  conversationId?: string,
+  traceId?: string,
+  signal?: AbortSignal
+): Promise<AgentResponse> {
   const formData = new FormData();
   formData.append("text", text);
   formData.append("image", image);
@@ -87,7 +101,8 @@ export async function uploadImage(text: string, image: File, conversationId?: st
   const response = await fetch("/upload", {
     method: "POST",
     body: formData,
-    credentials: "include"
+    credentials: "include",
+    signal
   });
 
   return readJson<AgentResponse>(response);

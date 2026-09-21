@@ -39,6 +39,19 @@ function createSystemMessage(content: string): ChatMessage {
   };
 }
 
+function createStoppedMessage(): ChatMessage {
+  return {
+    id: createId("stopped"),
+    role: "system",
+    agent: "系统",
+    statusLabel: "已暂停",
+    content: "已停止等待本次回答，你可以修改内容后重新发送。"
+  };
+}
+
+// 中断原因：新建会话时静默丢弃请求，不再向已清空的消息流追加提示。
+const RESET_REASON = "conversation-reset";
+
 export default function App() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputValue, setInputValue] = useState("");
@@ -50,7 +63,11 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState<string | null>(null);
   const [traceRuns, setTraceRuns] = useState<TraceRun[]>([]);
   const [selectedTraceId, setSelectedTraceId] = useState<string | null>(null);
+  // 窄屏下两侧改为抽屉，默认收起，避免一进来就盖住会话区。
+  const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth > 1040);
+  const [inspectorOpen, setInspectorOpen] = useState(() => window.innerWidth > 1180);
   const objectUrlsRef = useRef<Set<string>>(new Set());
+  const abortRef = useRef<AbortController | null>(null);
 
   function upsertTrace(trace: ExecutionTrace, queryLabel?: string) {
     setTraceRuns((current) => {
@@ -110,6 +127,7 @@ export default function App() {
   }
 
   async function handleLogout() {
+    abortRef.current?.abort(RESET_REASON);
     await logoutLocal();
     setCurrentUser(null);
     setConversationId(undefined);
@@ -139,7 +157,8 @@ export default function App() {
     setImageDraft(null);
   }
 
-  function handleClear() {
+  function handleNewConversation() {
+    abortRef.current?.abort(RESET_REASON);
     objectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
     objectUrlsRef.current.clear();
     setImageDraft(null);
@@ -147,7 +166,12 @@ export default function App() {
     setMessages([]);
     setTraceRuns([]);
     setSelectedTraceId(null);
+    setConversationId(undefined);
     setStatusMessage(null);
+  }
+
+  function handleStop() {
+    abortRef.current?.abort();
   }
 
   async function handleSubmit() {
@@ -157,6 +181,9 @@ export default function App() {
     if (busy || (!messageText && !draft)) {
       return;
     }
+
+    const controller = new AbortController();
+    abortRef.current = controller;
 
     const userMessage: ChatMessage = {
       id: createId("user"),
@@ -176,7 +203,7 @@ export default function App() {
     const queryLabel = messageText || "上传影像并开始分析";
 
     try {
-      const initialTrace = await createExecutionTrace(conversationId);
+      const initialTrace = await createExecutionTrace(conversationId, controller.signal);
       traceId = initialTrace.trace_id;
       const requestConversationId = initialTrace.conversation_id;
       setConversationId(requestConversationId);
@@ -187,9 +214,9 @@ export default function App() {
       pollingPromise = (async () => {
         while (polling) {
           await new Promise((resolve) => window.setTimeout(resolve, 300));
-          if (!polling || !traceId) break;
+          if (!polling || !traceId || controller.signal.aborted) break;
           try {
-            const liveTrace = await getExecutionTrace(traceId);
+            const liveTrace = await getExecutionTrace(traceId, controller.signal);
             upsertTrace(liveTrace, queryLabel);
             if (liveTrace.status === "completed" || liveTrace.status === "failed") break;
           } catch {
@@ -199,8 +226,8 @@ export default function App() {
       })();
 
       const data = draft
-        ? await uploadImage(messageText, draft.file, requestConversationId, traceId)
-        : await sendChat(messageText, requestConversationId, traceId);
+        ? await uploadImage(messageText, draft.file, requestConversationId, traceId, controller.signal)
+        : await sendChat(messageText, requestConversationId, traceId, controller.signal);
       if (data.conversation_id) setConversationId(data.conversation_id);
       if (data.execution_trace) upsertTrace(data.execution_trace, queryLabel);
       const assistantMessage = createAssistantMessage(data, draft?.previewUrl || null);
@@ -208,6 +235,20 @@ export default function App() {
       setMessages((current) => current.filter((item) => item.id !== "thinking").concat(assistantMessage));
       setImageDraft(null);
     } catch (error) {
+      if (controller.signal.aborted) {
+        const silent = controller.signal.reason === RESET_REASON;
+        setMessages((current) => {
+          const remaining = current.filter((item) => item.id !== "thinking");
+          return silent ? remaining : remaining.concat(createStoppedMessage());
+        });
+        if (!silent) {
+          // 输入框为空时把原问题放回去，避免用户重打；已写新内容则保留新内容。
+          setInputValue((current) => current || messageText);
+          setStatusMessage("已暂停等待，可修改后重新发送。");
+          window.setTimeout(() => setStatusMessage(null), 3000);
+        }
+        return;
+      }
       console.error("Request failed:", error);
       if (traceId) {
         try {
@@ -221,6 +262,7 @@ export default function App() {
     } finally {
       polling = false;
       if (pollingPromise) await pollingPromise;
+      if (abortRef.current === controller) abortRef.current = null;
       setBusy(false);
     }
   }
@@ -270,9 +312,24 @@ export default function App() {
     return <AuthScreen onSubmit={handleAuth} />;
   }
 
+  const shellClassName = [
+    "app-shell",
+    sidebarOpen ? "" : "app-shell--sidebar-collapsed",
+    inspectorOpen ? "" : "app-shell--inspector-collapsed"
+  ].filter(Boolean).join(" ");
+
   return (
-    <div className="app-shell">
-      <Sidebar onClear={handleClear} onLogout={() => void handleLogout()} currentUser={currentUser} />
+    <div className={shellClassName}>
+      <Sidebar onNewConversation={handleNewConversation} onLogout={() => void handleLogout()} currentUser={currentUser} />
+      <button
+        type="button"
+        className="drawer-scrim"
+        aria-label="关闭侧栏"
+        onClick={() => {
+          setSidebarOpen(false);
+          setInspectorOpen(false);
+        }}
+      />
       <ChatPanel
         messages={messages}
         inputValue={inputValue}
@@ -284,8 +341,13 @@ export default function App() {
         onImageChange={handleImageChange}
         onImageRemove={handleImageRemove}
         onSubmit={() => void handleSubmit()}
+        onStop={handleStop}
         onVoiceToggle={recorder.toggleRecording}
         onValidate={handleValidation}
+        sidebarOpen={sidebarOpen}
+        inspectorOpen={inspectorOpen}
+        onToggleSidebar={() => setSidebarOpen((current) => !current)}
+        onToggleInspector={() => setInspectorOpen((current) => !current)}
       />
       <ExecutionInspector
         traces={traceRuns}

@@ -1,4 +1,4 @@
-﻿import { CircleAlert, ShieldCheck, Sparkles } from "lucide-react";
+﻿import { CircleAlert, PanelLeft, PanelRight, ShieldCheck, Sparkles } from "lucide-react";
 import type { ChatMessage, ImageDraft } from "../types";
 import { Composer } from "./Composer";
 import { MessageList } from "./MessageList";
@@ -14,8 +14,13 @@ type ChatPanelProps = {
   onImageChange: (file: File) => void;
   onImageRemove: () => void;
   onSubmit: () => void;
+  onStop: () => void;
   onVoiceToggle: () => void;
   onValidate: (validation: "yes" | "no", comments: string) => Promise<void>;
+  sidebarOpen: boolean;
+  inspectorOpen: boolean;
+  onToggleSidebar: () => void;
+  onToggleInspector: () => void;
 };
 
 export function ChatPanel({
@@ -29,14 +34,29 @@ export function ChatPanel({
   onImageChange,
   onImageRemove,
   onSubmit,
+  onStop,
   onVoiceToggle,
-  onValidate
+  onValidate,
+  sidebarOpen,
+  inspectorOpen,
+  onToggleSidebar,
+  onToggleInspector
 }: ChatPanelProps) {
   return (
     <main className="chat-panel">
       <header className="chat-header">
         <div className="chat-title-row">
-          <div>
+          <button
+            type="button"
+            className={`panel-toggle${sidebarOpen ? " is-active" : ""}`}
+            onClick={onToggleSidebar}
+            aria-label={sidebarOpen ? "收起左侧导航" : "展开左侧导航"}
+            aria-expanded={sidebarOpen}
+            title={sidebarOpen ? "收起左侧导航" : "展开左侧导航"}
+          >
+            <PanelLeft size={18} />
+          </button>
+          <div className="chat-title-copy">
             <span className="eyebrow">Clinical Consultation</span>
             <h2>医疗智能体会话</h2>
           </div>
@@ -44,6 +64,16 @@ export function ChatPanel({
             <span className="status-dot" aria-hidden="true" />
             在线
           </div>
+          <button
+            type="button"
+            className={`panel-toggle${inspectorOpen ? " is-active" : ""}`}
+            onClick={onToggleInspector}
+            aria-label={inspectorOpen ? "收起执行轨迹" : "展开执行轨迹"}
+            aria-expanded={inspectorOpen}
+            title={inspectorOpen ? "收起执行轨迹" : "展开执行轨迹"}
+          >
+            <PanelRight size={18} />
+          </button>
         </div>
         <div className="disclaimer-bar">
           <CircleAlert size={16} aria-hidden="true" />
@@ -71,6 +101,7 @@ export function ChatPanel({
           onImageChange={onImageChange}
           onImageRemove={onImageRemove}
           onSubmit={onSubmit}
+          onStop={onStop}
           onVoiceToggle={onVoiceToggle}
         />
       </div>

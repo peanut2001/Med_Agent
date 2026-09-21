@@ -59,43 +59,44 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, label:has(inp
 
 .app-shell {
   display: grid;
-  grid-template-columns: var(--sidebar-width) minmax(520px, 1fr) var(--inspector-width);
-  gap: 18px;
-  width: min(100%, 1880px);
-  min-height: 100dvh;
-  margin: 0 auto;
-  padding: 18px;
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr) var(--inspector-width);
+  width: 100%;
+  height: 100dvh;
+  overflow: hidden;
+  transition: grid-template-columns 220ms ease;
 }
+/* 收起某一侧：把该列宽归零并清掉内边距，内容被列宽裁掉。 */
+.app-shell.app-shell--sidebar-collapsed { --sidebar-width: 0px; }
+.app-shell.app-shell--inspector-collapsed { --inspector-width: 0px; }
+.app-shell--sidebar-collapsed .sidebar { padding-right: 0; padding-left: 0; border-right-width: 0; }
+.app-shell--inspector-collapsed .execution-inspector { border-left-width: 0; }
 
-.sidebar, .chat-panel, .execution-inspector {
-  border: 1px solid rgba(198, 217, 211, 0.8);
-  background: rgba(255, 255, 255, 0.94);
-  box-shadow: var(--shadow-lg);
-  backdrop-filter: blur(18px);
-}
+.sidebar, .chat-panel, .execution-inspector { background: var(--surface); }
 
 .sidebar {
-  position: sticky;
-  top: 18px;
   display: flex;
   flex-direction: column;
-  gap: 24px;
-  height: calc(100dvh - 36px);
-  overflow: auto;
-  padding: 22px 18px 18px;
-  border-radius: var(--radius-xl);
+  gap: 22px;
+  min-width: 0;
+  height: 100dvh;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 18px 16px;
+  border-right: 1px solid var(--border);
+  background: var(--surface-subtle);
 }
 
 .execution-inspector {
-  position: sticky;
-  top: 18px;
   display: grid;
   grid-template-rows: auto auto auto minmax(0, 1fr) auto;
   min-width: 0;
-  height: calc(100dvh - 36px);
+  height: 100dvh;
   overflow: hidden;
-  border-radius: var(--radius-xl);
+  border-left: 1px solid var(--border);
 }
+
+/* 窄屏时两侧改为浮层抽屉，这块遮罩负责点击关闭。 */
+.drawer-scrim { display: none; }
 .inspector-header { display: grid; gap: 14px; padding: 20px 18px 16px; border-bottom: 1px solid var(--border); }
 .inspector-title-row { display: flex; align-items: center; gap: 11px; }
 .inspector-title-row h2 { margin: 0; font-size: 1.02rem; letter-spacing: -0.02em; }
@@ -252,17 +253,50 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, label:has(inp
   transition: border-color 160ms ease, color 160ms ease, background 160ms ease;
 }
 .clear-button:hover { color: var(--danger); border-color: #efcaca; background: #fffafa; }
+.new-chat-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 44px;
+  color: #fff;
+  border: 0;
+  border-radius: 13px;
+  background: linear-gradient(145deg, #13a293, var(--primary-deep));
+  box-shadow: 0 8px 18px rgba(8, 127, 115, 0.22);
+  font-size: 0.86rem;
+  font-weight: 700;
+  transition: transform 160ms ease, box-shadow 160ms ease, background 160ms ease;
+}
+.new-chat-button:hover { background: linear-gradient(145deg, #0c8c80, #054f49); transform: translateY(-1px); box-shadow: 0 10px 22px rgba(8, 127, 115, 0.28); }
+.new-chat-button:active { transform: scale(0.98); }
 
 .chat-panel {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   min-width: 0;
-  height: calc(100dvh - 36px);
+  height: 100dvh;
   overflow: hidden;
-  border-radius: var(--radius-xl);
 }
-.chat-header { padding: 21px 26px 0; border-bottom: 1px solid var(--border); background: rgba(255, 255, 255, 0.88); }
-.chat-title-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding-bottom: 17px; }
+.chat-header { padding: 16px 22px 0; border-bottom: 1px solid var(--border); background: var(--surface); }
+.chat-title-row { display: flex; align-items: center; gap: 12px; padding-bottom: 14px; }
+.chat-title-copy { flex: 1 1 auto; min-width: 0; }
+.panel-toggle {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 38px;
+  height: 38px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: var(--surface);
+  transition: color 150ms ease, border-color 150ms ease, background 150ms ease;
+}
+.panel-toggle:hover { color: var(--primary); border-color: var(--border-strong); background: var(--surface-muted); }
+.panel-toggle.is-active { color: var(--primary); border-color: #b3d8d0; background: var(--primary-soft); }
+.panel-toggle:active { transform: scale(0.96); }
 .chat-header h2 { font-size: 1.42rem; line-height: 1.25; }
 .online-badge {
   display: inline-flex;
@@ -283,8 +317,8 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, label:has(inp
   grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 9px;
   align-items: center;
-  margin: 0 -26px;
-  padding: 10px 26px;
+  margin: 0 -22px;
+  padding: 10px 22px;
   color: #6f664e;
   background: #fffbf1;
   border-top: 1px solid #f3ead4;
@@ -427,7 +461,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, label:has(inp
   display: grid;
   grid-template-columns: 42px 42px minmax(0, 1fr) 46px;
   gap: 7px;
-  align-items: end;
+  align-items: center;
   padding: 8px;
   border: 1px solid var(--border-strong);
   border-radius: 18px;
@@ -456,12 +490,13 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, label:has(inp
 .voice-button--recording { color: #fff; background: var(--danger); animation: recording-glow 1.5s ease-in-out infinite; }
 .voice-button--recording:hover { color: #fff; background: #9f3030; }
 .voice-button--error { color: var(--danger); background: var(--danger-soft); }
-.composer-input-wrap { min-width: 0; padding: 4px 5px 2px; }
-.composer textarea { display: block; width: 100%; min-height: 25px; max-height: 150px; resize: none; overflow-y: auto; padding: 1px 2px; color: var(--text); border: 0; outline: 0; background: transparent; font-size: 0.88rem; line-height: 1.55; }
+.composer-input-wrap { display: flex; align-items: center; min-width: 0; padding: 0 5px; }
+.composer textarea { display: block; width: 100%; min-height: 24px; max-height: 150px; resize: none; overflow-y: auto; padding: 0 2px; color: var(--text); border: 0; outline: 0; background: transparent; font-size: 0.88rem; line-height: 1.55; }
 .composer textarea::placeholder { color: #91a29e; }
-.keyboard-hint { display: block; margin-top: 3px; color: #9aaaa6; font-size: 0.61rem; }
 .send-button { width: 46px; height: 46px; color: #fff; border-radius: 13px; background: linear-gradient(145deg, #119b8d, var(--primary-deep)); box-shadow: 0 7px 15px rgba(8, 127, 115, 0.24); }
 .send-button:hover { background: linear-gradient(145deg, #0c8c80, #054f49); transform: translateY(-1px); }
+.send-button--stop { background: linear-gradient(145deg, #c04747, var(--danger)); box-shadow: 0 7px 15px rgba(179, 58, 58, 0.24); }
+.send-button--stop:hover { background: linear-gradient(145deg, #a83a3a, #8c2f2f); }
 .image-draft { display: grid; grid-template-columns: 56px minmax(0, 1fr) 38px; gap: 11px; align-items: center; width: min(100%, 960px); margin: 0 auto 9px; padding: 9px; border: 1px solid var(--border); border-radius: 14px; background: rgba(255,255,255,0.96); box-shadow: var(--shadow-sm); }
 .image-draft img { width: 56px; height: 48px; object-fit: cover; border-radius: 9px; }
 .image-draft__copy { display: grid; min-width: 0; }
@@ -485,30 +520,43 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, label:has(inp
 }
 
 @media (max-width: 1180px) and (min-width: 1041px) {
-  .app-shell { grid-template-columns: 238px minmax(0, 1fr); }
-  .execution-inspector { position: static; grid-column: 1 / -1; height: 520px; }
+  .app-shell { --sidebar-width: 226px; --inspector-width: 302px; }
 }
 
 @media (max-width: 1040px) {
-  .app-shell { grid-template-columns: 1fr; min-height: 100dvh; padding: 12px; }
-  .sidebar { position: static; display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 14px; align-items: center; height: auto; overflow: visible; padding: 14px 16px; border-radius: var(--radius-lg); }
-  .system-card, .capability-nav, .safety-note, .sidebar-spacer, .sidebar-meta { display: none; }
-  .sidebar-footer { display: block; }
-  .clear-button { width: auto; min-width: 128px; padding: 0 14px; }
-  .chat-panel { height: calc(100dvh - 112px); min-height: 680px; border-radius: var(--radius-lg); }
-  .execution-inspector { position: static; height: 520px; border-radius: var(--radius-lg); }
+  /* 抽屉模式：两侧脱离网格浮在会话区之上，靠 transform 滑入滑出。 */
+  .app-shell { grid-template-columns: minmax(0, 1fr); }
+  .sidebar, .execution-inspector {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    z-index: 30;
+    width: min(84vw, 304px);
+    height: 100dvh;
+    box-shadow: var(--shadow-lg);
+    transition: transform 220ms ease;
+  }
+  .sidebar { left: 0; transform: translateX(-100%); }
+  .execution-inspector { right: 0; transform: translateX(100%); }
+  .app-shell:not(.app-shell--sidebar-collapsed) .sidebar { transform: none; }
+  .app-shell:not(.app-shell--inspector-collapsed) .execution-inspector { transform: none; }
+  .app-shell--sidebar-collapsed .sidebar { padding-right: 16px; padding-left: 16px; }
+  .drawer-scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 20;
+    padding: 0;
+    border: 0;
+    background: rgba(15, 35, 31, 0.42);
+  }
+  .app-shell--sidebar-collapsed.app-shell--inspector-collapsed .drawer-scrim { display: none; }
 }
 
 @media (max-width: 720px) {
-  .app-shell { gap: 9px; padding: 7px; }
-  .sidebar { grid-template-columns: minmax(0, 1fr) auto; padding: 11px 12px; border-radius: 17px; }
   .brand-mark { width: 40px; height: 40px; border-radius: 12px; }
   .brand-row h1 { font-size: 0.92rem; }
   .brand-row .eyebrow { font-size: 0.58rem; }
-  .clear-button { min-width: 42px; width: 42px; min-height: 40px; padding: 0; }
-  .clear-button span { display: none; }
-  .chat-panel { height: calc(100dvh - 76px); min-height: 560px; border-radius: 17px; }
-  .execution-inspector { height: 500px; border-radius: 17px; }
   .inspector-header { grid-template-columns: minmax(0, 1fr) auto; align-items: center; padding: 15px; }
   .trace-health { justify-self: end; }
   .trace-context { padding: 10px; }
@@ -541,7 +589,6 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, label:has(inp
   .send-button { width: 43px; height: 43px; }
   .composer-input-wrap { padding-left: 2px; padding-right: 2px; }
   .composer textarea { font-size: 0.82rem; }
-  .keyboard-hint { display: none; }
 }
 
 @media (max-width: 410px) {

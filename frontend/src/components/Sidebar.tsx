@@ -2,15 +2,16 @@
   BrainCircuit,
   HeartPulse,
   ImagePlus,
+  LogOut,
   MessageSquareText,
   Mic,
-  RotateCcw,
+  PenSquare,
   ShieldCheck,
   Sparkles
 } from "lucide-react";
 
 type SidebarProps = {
-  onClear: () => void;
+  onNewConversation: () => void;
   onLogout: () => void;
   currentUser: string;
 };
@@ -33,7 +34,7 @@ const capabilities = [
   }
 ];
 
-export function Sidebar({ onClear, onLogout, currentUser }: SidebarProps) {
+export function Sidebar({ onNewConversation, onLogout, currentUser }: SidebarProps) {
   return (
     <aside className="sidebar" aria-label="应用导航">
       <div className="brand-row">
@@ -45,6 +46,17 @@ export function Sidebar({ onClear, onLogout, currentUser }: SidebarProps) {
           <h1>海豚医疗智能助手</h1>
         </div>
       </div>
+
+      <button
+        type="button"
+        className="new-chat-button"
+        onClick={onNewConversation}
+        aria-label="开启新对话"
+        title="开启新对话"
+      >
+        <PenSquare size={17} aria-hidden="true" />
+        <span>新对话</span>
+      </button>
 
       <div className="system-card" aria-label="系统状态">
         <div className="system-card__heading">
@@ -89,11 +101,8 @@ export function Sidebar({ onClear, onLogout, currentUser }: SidebarProps) {
           <span><BrainCircuit size={15} /> 多智能体协同</span>
           <span><Sparkles size={15} /> 隐私会话</span>
         </div>
-        <button type="button" className="clear-button" onClick={onClear} aria-label="清空当前对话">
-          <RotateCcw size={17} aria-hidden="true" />
-          <span>清空对话</span>
-        </button>
-        <button type="button" className="clear-button" onClick={onLogout} aria-label="退出登录">
+        <button type="button" className="clear-button" onClick={onLogout} aria-label="退出登录" title="退出登录">
+          <LogOut size={16} aria-hidden="true" />
           <span>退出登录</span>
         </button>
       </div>
