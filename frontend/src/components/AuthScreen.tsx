@@ -43,7 +43,7 @@ const trustBadges = [
   { icon: ShieldCheck, label: "会话隔离" }
 ];
 
-/** 背景底图（assets/image.png 直转 WebP，未裁剪未加工）。图里只有插画，文字全部由 DOM 渲染。 */
+/** 背景底图（原图直转 WebP，未裁剪未加工）。图里只有插画，文字全部由 DOM 渲染。 */
 const authBgVars = { "--auth-bg-image": `url(${authBg})` } as CSSProperties;
 
 /** 登录状态检查期间的过渡页，与登录页共用同一张底图，避免闪烁跳变。 */

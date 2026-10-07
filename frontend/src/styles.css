@@ -739,7 +739,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, label:has(inp
   .send-button { width: 41px; height: 41px; }
 }
 /* ============================================================
-   登录 / 注册 —— 背景是 assets/image.png（直转 WebP，未裁剪未加工）
+   登录 / 注册 —— 背景是 src/assets/auth-bg.webp（原图直转，未裁剪未加工）
    图里只有插画，所有文字都是真实 DOM
    ============================================================ */
 .auth-screen {
