@@ -2,7 +2,7 @@
 
 # ⚕️ 多智能体医疗助手
 
-**基于多agent的多智能体医疗诊断与辅助系统**
+**用于学习与实践的多智能体医疗辅助系统**
 
 </div>
 
@@ -11,6 +11,7 @@
 ## 📚 目录
 
 - [概述](#概述)
+- [学习说明与参考项目](#学习说明与参考项目)
 - [界面预览](#界面预览)
 - [技术流程图](#技术流程图)
 - [核心功能](#核心功能)
@@ -25,7 +26,7 @@
 
 ## 📌 概述
 
-**多智能体医疗助手** 是一个基于 AI 驱动的聊天机器人，旨在辅助医疗诊断、研究和患者交互。
+**多智能体医疗助手（Med Agent）** 是一个用于学习与实践的 AI 医疗辅助项目，围绕医学知识问答、医学影像分析和多智能体协作，探索从前端交互到后端编排的完整实现。
 
 该系统由多智能体智能驱动，集成了以下核心能力：
 
@@ -34,6 +35,23 @@
 - **检索增强生成 (RAG)** — 基于向量数据库的知识检索
 - **实时网络搜索** — 获取最新医学信息
 - **人机协同验证** — 对 AI 医学影像诊断进行专家审核
+
+---
+
+## 📖 学习说明与参考项目
+
+本项目用于个人学习和技术实践，参考 [Echo Sonic](https://echo-sonic.app.dolphin-ai.cn/) 的界面与交互体验，并结合医疗辅助场景进行实现与调整。该链接为参考项目地址，本仓库与参考项目无官方关联。
+
+主要学习方向包括：
+
+- React / TypeScript 对话界面、会话管理与智能体执行轨迹展示
+- FastAPI 与 LangGraph 的多智能体编排
+- RAG 文档检索、医学影像分析与人工复核流程
+- Docker 部署与 GitHub Actions 发布流程
+
+仓库中也沿用了 [Multi-Agent-Medical-Assistant](https://github.com/souvikmajumder26/Multi-Agent-Medical-Assistant) 的部分代码与文档，感谢原项目作者的开源贡献。参考网站与上游开源仓库分别作为交互学习参考和代码来源列出。
+
+本项目的输出用于学习和演示，不作为临床诊断或治疗依据。
 
 ---
 
@@ -288,8 +306,8 @@ docker logs medical-assistant-app
 #### 1. 克隆仓库
 
 ```bash
-git clone https://github.com/souvikmajumder26/Multi-Agent-Medical-Assistant.git
-cd Multi-Agent-Medical-Assistant
+git clone https://github.com/peanut2001/Med_Agent.git
+cd Med_Agent
 ```
 
 #### 2. 创建并激活虚拟环境
