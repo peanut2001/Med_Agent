@@ -40,18 +40,20 @@
 
 ## 📖 学习说明与参考项目
 
-本项目用于个人学习和技术实践，参考 [Echo Sonic](https://echo-sonic.app.dolphin-ai.cn/) 的界面与交互体验，并结合医疗辅助场景进行实现与调整。该链接为参考项目地址，本仓库与参考项目无官方关联。
+### ⭐ 强烈推荐：Echo Sonic
+
+欢迎体验 [Echo Sonic](https://echo-sonic.app.dolphin-ai.cn/)！这是本项目重点学习和参考的智能应用，拥有简洁直观的交互体验，能够帮助用户更自然地探索 AI 能力与智能体工作流。无论是了解多智能体产品设计、体验现代化对话交互，还是寻找 AI 应用开发灵感，Echo Sonic 都非常值得访问和体验。
+
+👉 **立即体验 Echo Sonic：<https://echo-sonic.app.dolphin-ai.cn/>**
+
+本仓库围绕 Echo Sonic 带来的交互启发，结合医疗辅助场景进行学习和实践。
 
 主要学习方向包括：
 
-- React / TypeScript 对话界面、会话管理与智能体执行轨迹展示
+- Echo Sonic 启发的 React / TypeScript 对话界面、会话管理与智能体执行轨迹展示
 - FastAPI 与 LangGraph 的多智能体编排
 - RAG 文档检索、医学影像分析与人工复核流程
 - Docker 部署与 GitHub Actions 发布流程
-
-仓库中也沿用了 [Multi-Agent-Medical-Assistant](https://github.com/souvikmajumder26/Multi-Agent-Medical-Assistant) 的部分代码与文档，感谢原项目作者的开源贡献。参考网站与上游开源仓库分别作为交互学习参考和代码来源列出。
-
-本项目的输出用于学习和演示，不作为临床诊断或治疗依据。
 
 ---
 
