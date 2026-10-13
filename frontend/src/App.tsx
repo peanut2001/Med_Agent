@@ -64,7 +64,7 @@ function createSystemMessage(content: string): ChatMessage {
 }
 
 // 历史记录只保存文本与结果图路径：上传的原图是临时文件，不回放。
-// 复核按钮也不还原，审核状态存在服务端内存里，重放会得到失效的请求。
+// 是否恢复复核按钮由服务端检查当前复核状态和归属后决定。
 function toChatMessage(stored: StoredMessage): ChatMessage {
   return {
     id: `stored-${stored.message_id}`,
@@ -74,7 +74,8 @@ function toChatMessage(stored: StoredMessage): ChatMessage {
     content: stored.content,
     resultImage: stored.result_image,
     imageOmitted: stored.has_image,
-    requiresValidation: false
+    validationId: stored.validation_id || null,
+    requiresValidation: Boolean(stored.requires_validation && stored.validation_id)
   };
 }
 
@@ -105,12 +106,24 @@ export default function App() {
   const [selectedTraceId, setSelectedTraceId] = useState<string | null>(null);
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [conversationLoading, setConversationLoading] = useState(false);
   // 窄屏下两侧改为抽屉，默认收起，避免一进来就盖住会话区。
   const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth > 1040);
   const [inspectorOpen, setInspectorOpen] = useState(() => window.innerWidth > 1180);
   const objectUrlsRef = useRef<Set<string>>(new Set());
   const abortRef = useRef<AbortController | null>(null);
   const activeTraceRef = useRef<string | null>(null);
+  const viewEpochRef = useRef(0);
+  const historyAbortRef = useRef<AbortController | null>(null);
+  const pendingValidationsRef = useRef(new Set<string>());
+
+  function invalidateConversationView() {
+    viewEpochRef.current += 1;
+    historyAbortRef.current?.abort();
+    historyAbortRef.current = null;
+    setConversationLoading(false);
+    setBusy(false);
+  }
 
   function upsertTrace(trace: ExecutionTrace, queryLabel?: string) {
     setTraceRuns((current) => {
@@ -137,9 +150,11 @@ export default function App() {
 
   // 服务端要跑完当前节点才落终态，补拉到终态为止再定格面板。
   async function settleTrace(traceId: string, queryLabel: string) {
+    const epoch = viewEpochRef.current;
     for (let attempt = 0; attempt < 12; attempt += 1) {
       try {
         const trace = await getExecutionTrace(traceId);
+        if (epoch !== viewEpochRef.current) return;
         upsertTrace(trace, queryLabel);
         if (trace.status !== "running" && trace.status !== "queued") return;
       } catch {
@@ -190,6 +205,8 @@ export default function App() {
 
   useEffect(() => {
     return () => {
+      viewEpochRef.current += 1;
+      historyAbortRef.current?.abort();
       objectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
       objectUrlsRef.current.clear();
     };
@@ -201,16 +218,19 @@ export default function App() {
       return;
     }
     setHistoryLoading(true);
-    void listConversations()
-      .then(setConversations)
-      .catch((error) => console.error("Failed to load conversations:", error))
-      .finally(() => setHistoryLoading(false));
+    const controller = new AbortController();
+    void listConversations(controller.signal)
+      .then((items) => { if (!controller.signal.aborted) setConversations(items); })
+      .catch((error) => { if (!controller.signal.aborted) console.error("Failed to load conversations:", error); })
+      .finally(() => { if (!controller.signal.aborted) setHistoryLoading(false); });
+    return () => controller.abort();
   }, [currentUser]);
 
   // 回答落库后标题与排序才是新的，所以每轮结束都重新拉一次列表。
   function refreshConversations() {
+    const epoch = viewEpochRef.current;
     void listConversations()
-      .then(setConversations)
+      .then((items) => { if (epoch === viewEpochRef.current) setConversations(items); })
       .catch((error) => console.error("Failed to refresh conversations:", error));
   }
 
@@ -223,6 +243,11 @@ export default function App() {
     if (conversationIdToOpen === conversationId) return;
 
     abortRun(RESET_REASON);
+    invalidateConversationView();
+    const epoch = viewEpochRef.current;
+    const controller = new AbortController();
+    historyAbortRef.current = controller;
+    setConversationLoading(true);
     objectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
     objectUrlsRef.current.clear();
     setImageDraft(null);
@@ -235,11 +260,18 @@ export default function App() {
     if (window.innerWidth <= 1040) setSidebarOpen(false);
 
     try {
-      const stored = await getConversationMessages(conversationIdToOpen);
+      const stored = await getConversationMessages(conversationIdToOpen, controller.signal);
+      if (epoch !== viewEpochRef.current) return;
       setMessages(stored.map(toChatMessage));
     } catch (error) {
+      if (epoch !== viewEpochRef.current || controller.signal.aborted) return;
       console.error("Failed to open conversation:", error);
       setMessages([createSystemMessage("载入历史对话失败，请稍后重试。")]);
+    } finally {
+      if (epoch === viewEpochRef.current) {
+        historyAbortRef.current = null;
+        setConversationLoading(false);
+      }
     }
   }
 
@@ -258,26 +290,30 @@ export default function App() {
   }
 
   async function handleDeleteConversation(targetId: string) {
+    const epoch = viewEpochRef.current;
     try {
       await deleteConversation(targetId);
     } catch (error) {
+      if (epoch !== viewEpochRef.current) return;
       console.error("Failed to delete conversation:", error);
       flashStatus("删除失败，请稍后重试。");
       return;
     }
     setConversations((current) => current.filter((item) => item.conversation_id !== targetId));
-    if (targetId === conversationId) handleNewConversation();
+    if (epoch === viewEpochRef.current && targetId === conversationId) handleNewConversation();
   }
 
   async function handleAuth(mode: "login" | "register", username: string, password: string) {
     const data = mode === "register"
       ? await registerLocal(username, password)
       : await loginLocal(username, password);
+    handleNewConversation();
     setCurrentUser(data.user_id);
   }
 
   async function handleLogout() {
     abortRun(RESET_REASON);
+    handleNewConversation();
     await logoutLocal();
     setCurrentUser(null);
     setConversationId(undefined);
@@ -309,6 +345,7 @@ export default function App() {
 
   function handleNewConversation() {
     abortRun(RESET_REASON);
+    invalidateConversationView();
     objectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
     objectUrlsRef.current.clear();
     setImageDraft(null);
@@ -328,11 +365,12 @@ export default function App() {
     const messageText = inputValue.trim();
     const draft = imageDraft;
 
-    if (busy || (!messageText && !draft)) {
+    if (busy || conversationLoading || (!messageText && !draft)) {
       return;
     }
 
     const controller = new AbortController();
+    const epoch = viewEpochRef.current;
     abortRef.current = controller;
 
     const userMessage: ChatMessage = {
@@ -354,6 +392,10 @@ export default function App() {
 
     try {
       const initialTrace = await createExecutionTrace(conversationId, controller.signal);
+      if (epoch !== viewEpochRef.current) {
+        void cancelExecutionTrace(initialTrace.trace_id).catch(() => undefined);
+        return;
+      }
       traceId = initialTrace.trace_id;
       activeTraceRef.current = traceId;
       const requestConversationId = initialTrace.conversation_id;
@@ -369,6 +411,7 @@ export default function App() {
           if (!polling || !traceId || controller.signal.aborted) break;
           try {
             const liveTrace = await getExecutionTrace(traceId, controller.signal);
+            if (epoch !== viewEpochRef.current) break;
             upsertTrace(liveTrace, queryLabel);
             consecutiveErrors = 0;
             if (liveTrace.status !== "queued" && liveTrace.status !== "running") break;
@@ -383,6 +426,7 @@ export default function App() {
       const data = draft
         ? await uploadImage(messageText, draft.file, requestConversationId, traceId, controller.signal)
         : await sendChat(messageText, requestConversationId, traceId, controller.signal);
+      if (epoch !== viewEpochRef.current) return;
       if (data.conversation_id) setConversationId(data.conversation_id);
       if (data.execution_trace) upsertTrace(data.execution_trace, queryLabel);
       const assistantMessage = createAssistantMessage(data, draft?.previewUrl || null);
@@ -391,6 +435,7 @@ export default function App() {
       setImageDraft(null);
       refreshConversations();
     } catch (error) {
+      if (epoch !== viewEpochRef.current) return;
       if (controller.signal.aborted) {
         const silent = controller.signal.reason === RESET_REASON;
         setMessages((current) => {
@@ -409,7 +454,9 @@ export default function App() {
       console.error("Request failed:", error);
       if (traceId) {
         try {
-          upsertTrace(await getExecutionTrace(traceId), queryLabel);
+          const trace = await getExecutionTrace(traceId);
+          if (epoch !== viewEpochRef.current) return;
+          upsertTrace(trace, queryLabel);
         } catch {
           // Keep the last successfully polled snapshot.
         }
@@ -419,13 +466,20 @@ export default function App() {
     } finally {
       polling = false;
       if (pollingPromise) await pollingPromise;
-      if (abortRef.current === controller) abortRef.current = null;
+      if (abortRef.current === controller) {
+        abortRef.current = null;
+        setBusy(false);
+      }
       if (activeTraceRef.current === traceId) activeTraceRef.current = null;
-      setBusy(false);
     }
   }
 
-  async function handleValidation(validation: "yes" | "no", comments: string) {
+  async function handleValidation(messageId: string, validation: "yes" | "no", comments: string) {
+    const source = messages.find((item) => item.id === messageId && item.requiresValidation);
+    const validationId = source?.validationId;
+    if (!validationId || pendingValidationsRef.current.has(validationId)) return;
+    const epoch = viewEpochRef.current;
+    pendingValidationsRef.current.add(validationId);
     const waitingMessage: ChatMessage = {
       id: createId("validation"),
       role: "assistant",
@@ -437,29 +491,29 @@ export default function App() {
     setMessages((current) => [...current, waitingMessage]);
 
     try {
-      const source = [...messages].reverse().find((item) => item.requiresValidation);
-      if (!source) throw new Error("找不到待审核的诊断结果，请刷新后重试。");
-      const validationId = source.validationId;
-      if (!validationId) throw new Error("审核请求已失效，请重新上传图像。");
       const result = await validateMedicalOutput(validation, comments, validationId, conversationId);
+      if (epoch !== viewEpochRef.current) return;
       const content = [result.message, result.response].filter(Boolean).join("\n\n");
       const validationMessage: ChatMessage = {
-        id: createId("validated"),
+        id: `validated-${validationId}`,
         role: "assistant",
         agent: "HUMAN_VALIDATED",
-        statusLabel: validation === "yes" ? "已确认" : "需复查",
+        statusLabel: result.status === "validated" ? "已确认" : "需复查",
         content
       };
 
       setMessages((current) => current
-        .filter((item) => item.id !== waitingMessage.id)
+        .filter((item) => item.id !== waitingMessage.id && item.id !== validationMessage.id)
         .map((item) => item.validationId === validationId ? { ...item, requiresValidation: false } : item)
         .concat(validationMessage));
       refreshConversations();
     } catch (error) {
+      if (epoch !== viewEpochRef.current) return;
       console.error("Validation submission failed:", error);
       const message = error instanceof Error ? error.message : "验证提交失败，请重试。";
       setMessages((current) => current.filter((item) => item.id !== waitingMessage.id).concat(createSystemMessage(message)));
+    } finally {
+      pendingValidationsRef.current.delete(validationId);
     }
   }
 
@@ -506,6 +560,7 @@ export default function App() {
         inputValue={inputValue}
         imageDraft={imageDraft}
         busy={busy}
+        historyPending={conversationLoading}
         recorderState={recorder.state}
         statusMessage={statusMessage}
         onInputChange={setInputValue}

@@ -113,4 +113,6 @@ def resolve_conversation_id(request: Request, requested: Optional[str] = None) -
     request body/form.  Ownership is checked by the validation/checkpoint
     layer; new IDs are generated server-side.
     """
-    return requested or request.cookies.get("conversation_id") or os.urandom(16).hex()
+    # Absence explicitly starts a new conversation. A stale browser cookie
+    # must not reconnect a new chat (or a different account) to an old thread.
+    return requested or os.urandom(16).hex()

@@ -8,6 +8,7 @@ import secrets
 import sqlite3
 import time
 import re
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional
 
@@ -23,10 +24,15 @@ class LocalAuthStore:
         self._init_db()
         self._bootstrap_users()
 
+    @contextmanager
     def _connect(self):
         connection = sqlite3.connect(self.database_path, timeout=10)
         connection.row_factory = sqlite3.Row
-        return connection
+        try:
+            with connection:
+                yield connection
+        finally:
+            connection.close()
 
     def _init_db(self):
         with self._connect() as db:
@@ -140,7 +146,9 @@ class LocalAuthStore:
         now = int(time.time())
         with self._connect() as db:
             row = db.execute(
-                "SELECT user_id FROM local_sessions WHERE session_id = ? AND expires_at > ?",
+                "SELECT s.user_id FROM local_sessions s "
+                "JOIN local_users u ON u.user_id = s.user_id "
+                "WHERE s.session_id = ? AND s.expires_at > ? AND u.disabled = 0",
                 (session_id, now),
             ).fetchone()
         return str(row["user_id"]) if row else None

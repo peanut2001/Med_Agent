@@ -41,6 +41,11 @@ docker-compose*.yml
 uploads/
 data/docs_db/
 data/parsed_docs/
+data/*.db
+data/*.db-*
+data/*.sqlite*
+data/backup_*/
+data/failed_ingest_*/
 
 # Logs
 *.log

@@ -78,6 +78,8 @@ export type ConversationSummary = {
 
 /** 后端持久化的历史消息，字段与 conversation_store 表保持一致。 */
 export type StoredMessage = {
+  validation_id?: string | null;
+  requires_validation?: boolean;
   message_id: number;
   role: "user" | "assistant" | "system";
   agent: string | null;

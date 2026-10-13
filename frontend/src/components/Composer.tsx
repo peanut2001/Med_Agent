@@ -7,6 +7,7 @@ type ComposerProps = {
   value: string;
   imageDraft: ImageDraft | null;
   busy: boolean;
+  submitDisabled: boolean;
   recorderState: "idle" | "recording" | "transcribing" | "error";
   statusMessage: string | null;
   onChange: (value: string) => void;
@@ -28,6 +29,7 @@ export function Composer({
   value,
   imageDraft,
   busy,
+  submitDisabled,
   recorderState,
   statusMessage,
   onChange,
@@ -39,7 +41,7 @@ export function Composer({
 }: ComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const voiceBusy = recorderState === "transcribing";
-  const canSubmit = !busy && (!!value.trim() || !!imageDraft);
+  const canSubmit = !busy && !submitDisabled && (!!value.trim() || !!imageDraft);
 
   function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];

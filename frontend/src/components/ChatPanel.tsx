@@ -9,6 +9,7 @@ type ChatPanelProps = {
   inputValue: string;
   imageDraft: ImageDraft | null;
   busy: boolean;
+  historyPending: boolean;
   recorderState: "idle" | "recording" | "transcribing" | "error";
   statusMessage: string | null;
   onInputChange: (value: string) => void;
@@ -17,7 +18,7 @@ type ChatPanelProps = {
   onSubmit: () => void;
   onStop: () => void;
   onVoiceToggle: () => void;
-  onValidate: (validation: "yes" | "no", comments: string) => Promise<void>;
+  onValidate: (messageId: string, validation: "yes" | "no", comments: string) => Promise<void>;
   sidebarOpen: boolean;
   inspectorOpen: boolean;
   onToggleSidebar: () => void;
@@ -29,6 +30,7 @@ export function ChatPanel({
   inputValue,
   imageDraft,
   busy,
+  historyPending,
   recorderState,
   statusMessage,
   onInputChange,
@@ -123,6 +125,7 @@ export function ChatPanel({
           value={inputValue}
           imageDraft={imageDraft}
           busy={busy}
+          submitDisabled={historyPending}
           recorderState={recorderState}
           statusMessage={statusMessage}
           onChange={onInputChange}

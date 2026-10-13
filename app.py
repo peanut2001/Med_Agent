@@ -20,7 +20,7 @@ from pydub import AudioSegment
 from elevenlabs.client import ElevenLabs
 
 from config import Config
-from agents.agent_decision import process_query
+from agents.agent_decision import process_query, sync_validation_to_model
 from agents.artifacts import (
     PRIVATE_ARTIFACT_ROOT,
     cleanup_expired_artifacts,
@@ -35,6 +35,10 @@ from agents.execution_trace import (
 from agents.security import CurrentUser, get_current_user, resolve_conversation_id
 from agents.validation_store import validation_store
 from agents.local_auth import local_auth_store
+from agents.upload_limits import UploadBodyLimitMiddleware
+from agents.request_admission import RequestAdmissionMiddleware
+from agents.concurrency import conversation_lifecycle_locks, conversation_locks
+from agents.checkpoint import delete_conversation_checkpoint
 
 # Load configuration
 config = Config()
@@ -42,6 +46,15 @@ config = Config()
 # Initialize FastAPI app from the single release-version source.
 APP_VERSION = Path(__file__).with_name("VERSION").read_text(encoding="utf-8").strip()
 app = FastAPI(title="Multi-Agent Medical Chatbot", version=APP_VERSION)
+
+# Queue expensive routes asynchronously before dependencies or handlers borrow
+# worker threads. CORS remains outermost so rejection responses are readable.
+app.add_middleware(
+    RequestAdmissionMiddleware,
+    max_active=config.api.max_concurrent_agent_requests,
+    max_queued=config.api.max_queued_requests,
+    wait_seconds=config.api.request_queue_timeout_seconds,
+)
 
 # CORS middleware for cross-origin requests (e.g. Live Server on port 5500)
 app.add_middleware(
@@ -57,6 +70,15 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+)
+
+# Include a small allowance for multipart headers and accompanying fields.
+app.add_middleware(
+    UploadBodyLimitMiddleware,
+    limits={
+        "/upload": config.api.max_image_upload_size * 1024 * 1024 + 64 * 1024,
+        "/transcribe": config.api.max_audio_upload_size * 1024 * 1024 + 64 * 1024,
+    },
 )
 
 # Set up directories
@@ -236,6 +258,7 @@ def auth_register(request: LocalRegisterRequest, response: Response):
 def auth_logout(request: Request, response: Response):
     local_auth_store.revoke_session(request.cookies.get("med_agent_session"))
     response.delete_cookie("med_agent_session")
+    response.delete_cookie("conversation_id")
     return {"authenticated": False}
 
 
@@ -289,10 +312,32 @@ def _record_turn(
             agent=payload.get("agent"),
             status_label="已返回",
             result_image=payload.get("result_image"),
+            validation_request_id=payload.get("validation_id"),
         )
     except Exception:
         import traceback
         traceback.print_exc()
+
+
+def _process_turn(query, *, user_id, conversation_id, trace_id, has_image=False):
+    """Serialize model execution and history writes against conversation deletion."""
+    with conversation_lifecycle_locks.hold(f"{user_id}:{conversation_id}"):
+        conversation_store.check_access(conversation_id, user_id=user_id)
+        result = process_query(
+            query, user_id=user_id, conversation_id=conversation_id, trace_id=trace_id,
+            history_loader=lambda limit: conversation_store.get_recent_messages(
+                conversation_id, user_id=user_id, limit=limit
+            ),
+        )
+        payload = _agent_response_payload(result, conversation_id)
+        _record_turn(
+            user_id=user_id,
+            conversation_id=conversation_id,
+            query=query.get("text", "") if isinstance(query, dict) else query,
+            payload=payload,
+            has_image=has_image,
+        )
+        return payload
 
 
 @app.get("/conversations")
@@ -314,6 +359,25 @@ def get_conversation_messages(
         raise HTTPException(status_code=403, detail="Conversation belongs to another user") from exc
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Conversation not found") from exc
+    for message in messages:
+        validation_id = message.pop("validation_request_id", None)
+        # Older image answers already contain the review ID in their private
+        # image URL; retain support for these pre-migration history rows.
+        image_url = message.get("result_image") or ""
+        if not validation_id and image_url.startswith("/validations/") and image_url.endswith("/image"):
+            validation_id = image_url[len("/validations/"):-len("/image")]
+        message["requires_validation"] = False
+        message["validation_id"] = None
+        if message["role"] != "assistant" or not validation_id:
+            continue
+        try:
+            record = validation_store.get_for_user(validation_id, user_id=current_user.user_id)
+        except KeyError:
+            continue
+        if record.conversation_id != conversation_id:
+            continue
+        message["validation_id"] = validation_id
+        message["requires_validation"] = record.status == "pending"
     return {"conversation_id": conversation_id, "messages": messages}
 
 
@@ -341,7 +405,14 @@ def delete_conversation(
     current_user: CurrentUser = Depends(get_current_user),
 ):
     try:
-        conversation_store.delete(conversation_id, user_id=current_user.user_id)
+        thread_id = f"{current_user.user_id}:{conversation_id}"
+        with conversation_lifecycle_locks.hold(thread_id), conversation_locks.hold(thread_id):
+            conversation_store.check_access(conversation_id, user_id=current_user.user_id, require_exists=True)
+            validation_store.delete_for_conversation(
+                user_id=current_user.user_id, conversation_id=conversation_id
+            )
+            delete_conversation_checkpoint(thread_id)
+            conversation_store.delete(conversation_id, user_id=current_user.user_id)
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail="Conversation belongs to another user") from exc
     except KeyError as exc:
@@ -411,8 +482,8 @@ async def chat(
     
     conversation_id = resolve_conversation_id(http_request, request.conversation_id)
     try:
-        response_data = await run_in_threadpool(
-            process_query,
+        payload = await run_in_threadpool(
+            _process_turn,
             request.query,
             user_id=current_user.user_id,
             conversation_id=conversation_id,
@@ -423,14 +494,9 @@ async def chat(
         response.set_cookie(key="session_id", value=session_id, httponly=True, samesite="lax")
         response.set_cookie(key="conversation_id", value=conversation_id, httponly=True, samesite="lax")
 
-        payload = _agent_response_payload(response_data, conversation_id)
-        _record_turn(
-            user_id=current_user.user_id,
-            conversation_id=conversation_id,
-            query=request.query,
-            payload=payload,
-        )
         return payload
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail="Conversation belongs to another user") from exc
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Execution trace not found") from exc
     except TraceAlreadyUsedError as exc:
@@ -472,7 +538,7 @@ async def upload_image(
         )
     
     # Check file size before saving
-    file_content = await image.read()
+    file_content = await image.read(config.api.max_image_upload_size * 1024 * 1024 + 1)
     if len(file_content) > config.api.max_image_upload_size * 1024 * 1024:  # Convert MB to bytes
         execution_trace_store.fail_for_user(
             trace_id, user_id=current_user.user_id
@@ -497,27 +563,22 @@ async def upload_image(
     try:
         await run_in_threadpool(Path(file_path).write_bytes, file_content)
         query = {"text": text, "image": file_path}
-        response_data = await run_in_threadpool(
-            process_query,
+        payload = await run_in_threadpool(
+            _process_turn,
             query,
             user_id=current_user.user_id,
             conversation_id=conversation_id,
             trace_id=trace_id,
+            has_image=True,
         )
 
         # Set session cookie
         response.set_cookie(key="session_id", value=session_id, httponly=True, samesite="lax")
         response.set_cookie(key="conversation_id", value=conversation_id, httponly=True, samesite="lax")
 
-        payload = _agent_response_payload(response_data, conversation_id)
-        _record_turn(
-            user_id=current_user.user_id,
-            conversation_id=conversation_id,
-            query=text,
-            payload=payload,
-            has_image=True,
-        )
         return payload
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail="Conversation belongs to another user") from exc
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Execution trace not found") from exc
     except TraceAlreadyUsedError as exc:
@@ -556,54 +617,43 @@ def validate_medical_output(
         # Set session cookie
         response.set_cookie(key="session_id", value=session_id, httponly=True, samesite="lax")
         response.set_cookie(key="conversation_id", value=conversation_id, httponly=True, samesite="lax")
-        record = validation_store.resolve(
-            validation_id,
-            user_id=current_user.user_id,
-            conversation_id=conversation_id,
-            result=validation_result,
-            comments=comments,
-            reviewer_id=current_user.user_id,
-        )
-
-        if record.status == 'approved':
-            result = {
-                "status": "validated",
-                "message": "**Output confirmed by human validator:**",
-                "response": record.original_output,
-                "validation_id": validation_id,
-                "conversation_id": conversation_id,
-            }
-        else:
-            result = {
-                "status": "rejected",
-                "comments": comments,
-                "message": "**Output requires further review:**",
-                "response": "The previous medical analysis requires further review.",
-                "validation_id": validation_id,
-                "conversation_id": conversation_id,
-            }
-
-        # Same joining rule the chat panel uses, so replayed history matches
-        # what the user saw live.
-        try:
-            conversation_store.append(
+        with conversation_lifecycle_locks.hold(f"{current_user.user_id}:{conversation_id}"):
+            conversation_store.check_access(
+                conversation_id, user_id=current_user.user_id, require_exists=True
+            )
+            record = validation_store.resolve(
+                validation_id,
                 user_id=current_user.user_id,
                 conversation_id=conversation_id,
-                role="assistant",
-                content="\n\n".join(
-                    part for part in (result["message"], result["response"]) if part
-                ),
-                agent="HUMAN_VALIDATED",
-                status_label="已确认" if record.status == 'approved' else "需复查",
+                result=validation_result,
+                comments=comments,
+                reviewer_id=current_user.user_id,
             )
-        except Exception:
-            import traceback
-            traceback.print_exc()
-        return result
+            approved = record.status == "approved"
+            result = {
+                "status": "validated" if approved else "rejected",
+                "message": "**Output confirmed by human validator:**" if approved else "**Output requires further review:**",
+                "response": record.original_output if approved else "The previous medical analysis requires further review.",
+                "validation_id": validation_id,
+                "conversation_id": conversation_id,
+            }
+            if not approved:
+                result["comments"] = record.comments
+            sync_validation_to_model(record)
+            conversation_store.append_validation(
+                user_id=current_user.user_id,
+                conversation_id=conversation_id,
+                validation_id=validation_id,
+                content="\n\n".join(part for part in (result["message"], result["response"]) if part),
+                status_label="已确认" if approved else "需复查",
+            )
+            return result
     except PermissionError as exc:
         raise HTTPException(status_code=403, detail="Validation does not belong to this user or conversation") from exc
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Validation request not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception:
         import traceback
         traceback.print_exc()
@@ -713,7 +763,10 @@ async def transcribe_audio(
     """Transcribe a private temporary audio upload."""
     if not audio.filename:
         return JSONResponse(status_code=400, content={"error": "No audio file selected"})
-    audio_content = await audio.read()
+    max_audio_bytes = config.api.max_audio_upload_size * 1024 * 1024
+    audio_content = await audio.read(max_audio_bytes + 1)
+    if len(audio_content) > max_audio_bytes:
+        return JSONResponse(status_code=413, content={"error": "Audio file too large"})
     if not audio_content:
         return JSONResponse(status_code=400, content={"error": "Received empty audio file"})
 

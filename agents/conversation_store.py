@@ -10,6 +10,7 @@ refresh or a restart.
 import os
 import sqlite3
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -32,10 +33,15 @@ class ConversationStore:
         Path(database_path).parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
 
+    @contextmanager
     def _connect(self):
         connection = sqlite3.connect(self.database_path, timeout=10)
         connection.row_factory = sqlite3.Row
-        return connection
+        try:
+            with connection:
+                yield connection
+        finally:
+            connection.close()
 
     def _init_db(self):
         with self._connect() as db:
@@ -58,11 +64,22 @@ class ConversationStore:
                     content TEXT NOT NULL,
                     result_image TEXT,
                     has_image INTEGER NOT NULL DEFAULT 0,
+                    validation_id TEXT,
+                    validation_request_id TEXT,
                     created_at INTEGER NOT NULL
                 );
                 CREATE INDEX IF NOT EXISTS idx_conversation_messages_thread
                     ON conversation_messages(conversation_id, message_id);
             """)
+            columns = {row["name"] for row in db.execute("PRAGMA table_info(conversation_messages)")}
+            if "validation_id" not in columns:
+                db.execute("ALTER TABLE conversation_messages ADD COLUMN validation_id TEXT")
+            if "validation_request_id" not in columns:
+                db.execute("ALTER TABLE conversation_messages ADD COLUMN validation_request_id TEXT")
+            db.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_conversation_validation "
+                "ON conversation_messages(validation_id) WHERE validation_id IS NOT NULL"
+            )
 
     @staticmethod
     def _owned(db, conversation_id: str, user_id: str) -> Optional[sqlite3.Row]:
@@ -82,6 +99,30 @@ class ConversationStore:
             raise PermissionError("conversation_owned_by_another_user")
         return row
 
+    def check_access(self, conversation_id: str, *, user_id: str, require_exists: bool = False) -> None:
+        """Allow new IDs, but reject an existing conversation owned by somebody else."""
+        with self._connect() as db:
+            if self._owned(db, conversation_id, user_id) is None and require_exists:
+                raise KeyError("conversation_not_found")
+
+    def append_validation(self, *, user_id: str, conversation_id: str,
+                          validation_id: str, content: str, status_label: str) -> None:
+        """Persist a review once, without recreating a deleted conversation."""
+        now = int(time.time())
+        with self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            if self._owned(db, conversation_id, user_id) is None:
+                raise KeyError("conversation_not_found")
+            inserted = db.execute(
+                "INSERT OR IGNORE INTO conversation_messages "
+                "(conversation_id, role, agent, status_label, content, created_at, validation_id) "
+                "VALUES (?, 'assistant', 'HUMAN_VALIDATED', ?, ?, ?, ?)",
+                (conversation_id, status_label, content, now, validation_id),
+            )
+            if inserted.rowcount:
+                db.execute("UPDATE conversations SET updated_at = ? WHERE conversation_id = ?",
+                           (now, conversation_id))
+
     def append(
         self,
         *,
@@ -93,6 +134,7 @@ class ConversationStore:
         status_label: Optional[str] = None,
         result_image: Optional[str] = None,
         has_image: bool = False,
+        validation_request_id: Optional[str] = None,
     ) -> None:
         if role not in MESSAGE_ROLES:
             raise ValueError(f"Unsupported message role: {role}")
@@ -125,7 +167,7 @@ class ConversationStore:
                 )
             db.execute(
                 "INSERT INTO conversation_messages(conversation_id, role, agent, status_label,"
-                " content, result_image, has_image, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                " content, result_image, has_image, created_at, validation_request_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     conversation_id,
                     role,
@@ -135,6 +177,7 @@ class ConversationStore:
                     result_image,
                     1 if has_image else 0,
                     now,
+                    validation_request_id,
                 ),
             )
 
@@ -156,11 +199,23 @@ class ConversationStore:
                 raise KeyError("conversation_not_found")
             rows = db.execute(
                 "SELECT message_id, role, agent, status_label, content, result_image,"
-                " has_image, created_at FROM conversation_messages"
+                " has_image, created_at, validation_request_id FROM conversation_messages"
                 " WHERE conversation_id = ? ORDER BY message_id",
                 (conversation_id,),
             ).fetchall()
         return [{**dict(row), "has_image": bool(row["has_image"])} for row in rows]
+
+    def get_recent_messages(self, conversation_id: str, *, user_id: str, limit: int) -> List[Dict[str, Any]]:
+        """Read a bounded, owned history window for checkpoint recovery."""
+        with self._connect() as db:
+            if self._owned(db, conversation_id, user_id) is None:
+                return []
+            rows = db.execute(
+                "SELECT message_id, role, content FROM conversation_messages "
+                "WHERE conversation_id = ? ORDER BY message_id DESC LIMIT ?",
+                (conversation_id, max(1, limit)),
+            ).fetchall()
+        return [dict(row) for row in reversed(rows)]
 
     def rename(self, conversation_id: str, *, user_id: str, title: str) -> Dict[str, Any]:
         clean = " ".join((title or "").split())[:TITLE_MAX_LENGTH]

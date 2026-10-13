@@ -10,7 +10,7 @@ import json
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional, Any, Literal, TypedDict, Union, Annotated
-from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, BaseMessage
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, BaseMessage, RemoveMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
 from langchain_core.runnables import RunnablePassthrough
@@ -836,34 +836,9 @@ def _create_agent_graph_unlocked():
 
         output_text = output if isinstance(output, str) else output.content
         
-        # If the last message was a human validation message
-        if "Human Validation Required" in output_text:
-            # Check if the current input is a human validation response
-            validation_input = ""
-            if isinstance(current_input, str):
-                validation_input = current_input
-            elif isinstance(current_input, dict):
-                validation_input = current_input.get("text", "")
-            
-            # If validation input exists
-            if validation_input.lower().startswith(('yes', 'no')):
-                # Add the validation result to the conversation history
-                validation_response = HumanMessage(content=f"Validation Result: {validation_input}")
-                
-                # If validation is 'No', modify the output
-                if validation_input.lower().startswith('no'):
-                    fallback_message = AIMessage(content="The previous medical analysis requires further review. A healthcare professional has flagged potential inaccuracies.")
-                    return {
-                        **state,
-                        "messages": [validation_response, fallback_message],
-                        "output": fallback_message
-                    }
-                
-                return {
-                    **state,
-                    "messages": validation_response
-                }
-        
+        # Review decisions are accepted only by /validate, never inferred
+        # from the text accompanying a new chat or image upload.
+
         # Get the original input text
         input_text = ""
         if isinstance(current_input, str):
@@ -1003,6 +978,85 @@ def init_agent_state() -> AgentState:
     }
 
 
+def sync_validation_to_model(record) -> None:
+    """Apply an owned review to model memory; caller holds the lifecycle lock."""
+    thread_id = f"{record.user_id}:{record.conversation_id}"
+    if record.thread_id != thread_id:
+        raise PermissionError("validation_thread_mismatch")
+    from agents.concurrency import conversation_locks
+    with conversation_locks.hold(thread_id):
+        graph = create_agent_graph()
+        run_config = {"configurable": {"thread_id": thread_id}}
+        snapshot = graph.get_state(run_config)
+        message_id = f"validation:{record.validation_id}"
+        messages = snapshot.values.get("messages", [])
+        if any(message.id == message_id for message in messages):
+            return
+        approved = record.status == "approved"
+        content = (
+            "Human review of a previous image analysis: "
+            + ("CONFIRMED by the user." if approved else
+               "REQUIRES FURTHER REVIEW. Do not treat the previous analysis as a confirmed finding.")
+            + "\nReviewed analysis:\n"
+            + untrusted_block("reviewed_analysis", record.original_output)
+        )
+        if record.comments:
+            content += "\nReviewer comments:\n" + untrusted_block("reviewer_comments", record.comments)
+        review = AIMessage(id=message_id, content=content)
+        excess = (messages + [review])[:-config.max_conversation_history]
+        graph.update_state(
+            run_config,
+            {"messages": [RemoveMessage(id=message.id) for message in excess] + [review]},
+            as_node="apply_guardrails",
+        )
+        prune = getattr(graph.checkpointer, "prune_thread", None)
+        if prune is not None:
+            prune(thread_id)
+
+
+def _invoke_with_bounded_history(graph, state, run_config, history_loader=None):
+    previous = graph.get_state(run_config)
+    if not previous.values.get("messages") and history_loader is not None:
+        rows = history_loader(config.max_conversation_history)
+        recovered = []
+        for row in rows:
+            # Stored system messages are display data, never model instructions.
+            message_type = AIMessage if row["role"] == "assistant" else HumanMessage
+            recovered.append(message_type(id=f"stored:{row['message_id']}", content=row["content"]))
+        if recovered:
+            graph.update_state(run_config, {"messages": recovered}, as_node="apply_guardrails")
+            previous = graph.get_state(run_config)
+    try:
+        result = graph.invoke(state, run_config)
+    except Exception:
+        # Failed/cancelled turns must not accumulate messages or leave graph
+        # tasks queued for the next input. Restore the last completed state.
+        current = graph.get_state(run_config)
+        restored = {**init_agent_state(), **previous.values}
+        restored["messages"] = [
+            RemoveMessage(id=message.id) for message in current.values.get("messages", [])
+        ] + previous.values.get("messages", [])[-config.max_conversation_history:]
+        graph.update_state(run_config, restored, as_node="apply_guardrails")
+        prune = getattr(graph.checkpointer, "prune_thread", None)
+        if prune is not None:
+            prune(run_config["configurable"]["thread_id"])
+        raise
+    excess = result["messages"][:-config.max_conversation_history]
+    if excess:
+        # MessagesState merges lists, so slicing the return value cannot
+        # remove old messages from the actual checkpoint.
+        graph.update_state(
+            run_config,
+            {"messages": [RemoveMessage(id=message.id) for message in excess]},
+            as_node="apply_guardrails",
+        )
+        result["messages"] = result["messages"][-config.max_conversation_history:]
+    prune = getattr(graph.checkpointer, "prune_thread", None)
+    if prune is not None:
+        prune(run_config["configurable"]["thread_id"])
+    return result
+
+
 def process_query(
     query: Union[str, Dict],
     conversation_history: List[BaseMessage] = None,
@@ -1010,6 +1064,7 @@ def process_query(
     user_id: str = "anonymous",
     conversation_id: str = "default",
     trace_id: Optional[str] = None,
+    history_loader=None,
 ) -> AgentState:
     """
     Process a user query through the agent decision system.
@@ -1067,9 +1122,11 @@ def process_query(
         with trace_context(trace_id):
             result = run_agent_request(
                 state["thread_id"],
-                graph.invoke,
+                _invoke_with_bounded_history,
+                graph,
                 state,
                 {"configurable": {"thread_id": state["thread_id"]}},
+                history_loader,
             )
     except BaseException:
         execution_trace_store.finish(trace_id, status="failed")
@@ -1082,10 +1139,6 @@ def process_query(
     )
     # print("######### DEBUG 4:", result)
     # state["messages"] = [result["messages"][-1].content]
-
-    # Keep history to reasonable size (ANOTHER OPTION: summarize and store before truncating history)
-    if len(result["messages"]) > config.max_conversation_history:  # Keep last config.max_conversation_history messages
-        result["messages"] = result["messages"][-config.max_conversation_history:]
 
     # visualize conversation history in console
     for m in result["messages"]:

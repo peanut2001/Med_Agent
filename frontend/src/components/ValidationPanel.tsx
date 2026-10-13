@@ -1,11 +1,12 @@
 ﻿import { CheckCircle2, ClipboardCheck, Loader2, XCircle } from "lucide-react";
-import { useState } from "react";
+import { useId, useState } from "react";
 
 type ValidationPanelProps = {
   onSubmit: (validation: "yes" | "no", comments: string) => Promise<void>;
 };
 
 export function ValidationPanel({ onSubmit }: ValidationPanelProps) {
+  const commentsId = useId();
   const [comments, setComments] = useState("");
   const [pendingChoice, setPendingChoice] = useState<"yes" | "no" | null>(null);
 
@@ -29,9 +30,9 @@ export function ValidationPanel({ onSubmit }: ValidationPanelProps) {
         </div>
       </div>
 
-      <label className="field-label" htmlFor="validation-comments">复核备注 <span>选填</span></label>
+      <label className="field-label" htmlFor={commentsId}>复核备注 <span>选填</span></label>
       <textarea
-        id="validation-comments"
+        id={commentsId}
         className="validation-comments"
         value={comments}
         onChange={(event) => setComments(event.target.value)}

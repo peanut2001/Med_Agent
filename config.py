@@ -286,7 +286,10 @@ class APIConfig:
         self.debug = True
         self.rate_limit = 10
         self.max_image_upload_size = 5  # max upload size in MB
+        self.max_audio_upload_size = _positive_int_env("MAX_AUDIO_UPLOAD_SIZE_MB", 25)
         self.max_concurrent_agent_requests = _positive_int_env("MAX_CONCURRENT_AGENT_REQUESTS", 4)
+        self.max_queued_requests = _positive_int_env("MAX_QUEUED_REQUESTS", 16)
+        self.request_queue_timeout_seconds = _positive_float_env("REQUEST_QUEUE_TIMEOUT_SECONDS", 15.0)
         self.max_concurrent_image_inferences = _positive_int_env("MAX_CONCURRENT_IMAGE_INFERENCES", 1)
         self.private_artifact_ttl_seconds = _positive_int_env("PRIVATE_ARTIFACT_TTL_SECONDS", 86400)
         self.checkpoint_database_url = os.getenv("CHECKPOINT_DATABASE_URL", "")

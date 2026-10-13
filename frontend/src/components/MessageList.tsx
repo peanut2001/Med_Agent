@@ -16,7 +16,7 @@ import { ValidationPanel } from "./ValidationPanel";
 
 type MessageListProps = {
   messages: ChatMessage[];
-  onValidate: (validation: "yes" | "no", comments: string) => Promise<void>;
+  onValidate: (messageId: string, validation: "yes" | "no", comments: string) => Promise<void>;
 };
 
 // 三条描述刻意保持相近长度，换行行数一致，三列底边才齐。
@@ -145,7 +145,9 @@ export function MessageList({ messages, onValidate }: MessageListProps) {
                 </div>
               ) : null}
 
-              {message.requiresValidation ? <ValidationPanel onSubmit={onValidate} /> : null}
+              {message.requiresValidation ? (
+                <ValidationPanel onSubmit={(validation, comments) => onValidate(message.id, validation, comments)} />
+              ) : null}
             </div>
           </article>
         );

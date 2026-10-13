@@ -120,11 +120,16 @@ class ValidationStore:
     def resolve(self, validation_id: str, *, user_id: str, conversation_id: str,
                 result: str, comments: Optional[str] = None,
                 reviewer_id: Optional[str] = None) -> ValidationRecord:
+        if result.lower() not in {"yes", "no"}:
+            raise ValueError("Validation result must be yes or no")
         if self._engine is not None:
             from sqlalchemy import text
             resolved_now = False
             with self._engine.begin() as conn:
-                row = conn.execute(text("SELECT * FROM medical_validations WHERE validation_id = :id"), {"id": validation_id}).mappings().first()
+                query = "SELECT * FROM medical_validations WHERE validation_id = :id"
+                if self._engine.dialect.name == "postgresql":
+                    query += " FOR UPDATE"
+                row = conn.execute(text(query), {"id": validation_id}).mappings().first()
                 record = self._from_mapping(row) if row else None
                 if record is None:
                     raise KeyError("validation_not_found")
@@ -166,6 +171,30 @@ class ValidationStore:
             details={"status": record.status},
         )
         return record
+
+    def delete_for_conversation(self, *, user_id: str, conversation_id: str) -> None:
+        """Invalidate reviews and their audit events when an owned chat is deleted."""
+        if self._engine is not None:
+            from sqlalchemy import text
+            params = {"user_id": user_id, "conversation_id": conversation_id}
+            with self._engine.begin() as conn:
+                conn.execute(text("""
+                    DELETE FROM medical_validation_audit WHERE validation_id IN (
+                        SELECT validation_id FROM medical_validations
+                        WHERE user_id = :user_id AND conversation_id = :conversation_id
+                    )
+                """), params)
+                conn.execute(text("""
+                    DELETE FROM medical_validations
+                    WHERE user_id = :user_id AND conversation_id = :conversation_id
+                """), params)
+            return
+        with self._lock:
+            ids = [key for key, record in self._records.items()
+                   if record.user_id == user_id and record.conversation_id == conversation_id]
+            for validation_id in ids:
+                del self._records[validation_id]
+                self._audit_events.pop(validation_id, None)
 
     def _append_audit(
         self, *, validation_id: str, event_type: str, actor_id: str, details: dict

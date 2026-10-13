@@ -64,6 +64,8 @@ image_inference_slots = BoundedSemaphore(
     _positive_int("MAX_CONCURRENT_IMAGE_INFERENCES", 1)
 )
 conversation_locks = KeyedLockPool()
+# Covers API history writes and deletion as well as model execution.
+conversation_lifecycle_locks = KeyedLockPool()
 
 
 def run_agent_request(key: str, operation: Callable[..., T], *args, **kwargs) -> T:
