@@ -49,45 +49,14 @@ class LocalGuardrails:
                thanks, goodbyes, and questions about what this assistant can
                do. The system routes those to a general conversation agent,
                so rejecting them here would make the assistant unusable.
-            10. Ask for the source of the information
-            11. Ask for the author of the information
-            12. Ask for the publication date of the information
-            13. Ask for the journal of the information
-            14. Ask for the page number of the information
-            15. Ask for the URL of the information
-            16. Ask for the DOI of the information
-            17. Ask for the abstract of the information
-            18. Ask for the full text of the information
-            19. Ask for the PDF of the information
-            20. Ask for the reference list of the information
-            21. Ask for the bibliography of the information
-            22. Ask for the sources of the information
-            23. Ask for the references of the information
-            24. Ask for the table of contents of the information
-            25. Ask for the index of the information
-            26. Ask for the introduction of the information
-            27. Ask for the conclusion of the information
-            28. Ask for the discussion of the information
-            29. Ask for the methods of the information
-            30. Ask for the results of the information
-            31. Ask for code generation
-            32. Ask for the implementation of a feature
-            33. Ask for the testing of a feature
-            34. Ask for the evaluation of a feature
-            35. Ask for the documentation of a feature
-            36. Ask for the tutorial of a feature
-            37. Ask for the example of a feature
-            38. Ask for the explanation of a feature
-            39. Ask for the discussion of a feature
-            40. Ask for the execution of any code in any language
-            41. Ask for the execution of a command
-            42. Ask for the execution of a script
-            43. Ask for the execution of a program
-            44. Ask for the execution of a task
-            45. Ask for the execution of a job
-            46. Ask for the execution of a process
-            47. Ask for the execution of a procedure
-            
+            10. Requests to write, run or debug software code, shell commands
+                or scripts. Medical procedures are not code and are SAFE.
+
+            Asking for the sources, citations, references, publication details
+            or documents behind medical information, or asking for recent
+            research or a web search on a medical topic, is SAFE: the system's
+            knowledge base and web search agents answer with cited sources.
+
             Respond with ONLY "SAFE" if the content is appropriate.
             If not safe, respond with "UNSAFE: [brief reason]".
             """

@@ -129,28 +129,34 @@ class ResponseGenerator:
             # Calculate confidence
             confidence = self._calculate_confidence(retrieved_docs)
 
-            # Add sources to response
-            if hasattr(self, 'include_sources') and self.include_sources:
-                response_with_source = redact_sensitive_output(response.content) + "\n\n##### Source documents:"
+            answer = redact_sensitive_output(response.content)
+
+            # Citations are built here, not written by the model. They are also
+            # returned on their own so the output reviewer, which rewrites the
+            # answer and used to drop them, is never given them to rewrite.
+            citation_blocks = []
+            if sources:  # Empty when include_sources is off
+                source_block = "##### Source documents:"
                 for current_source in sources:
                     source_path = current_source['path']
                     source_title = current_source['title']
-                    response_with_source += f"\n- [{source_title}]({source_path})"
-            else:
-                response_with_source = redact_sensitive_output(response.content)
-            
-            # Add picture paths to response, but only when there is at least one
-            # (an empty "Reference images" heading was previously appended to
-            # every answer).
-            response_with_source_and_picture_paths = response_with_source
+                    source_block += f"\n- [{source_title}]({source_path})"
+                citation_blocks.append(source_block)
+
+            # Only when there is at least one picture (an empty "Reference
+            # images" heading was previously appended to every answer).
             if picture_paths:
-                response_with_source_and_picture_paths += "\n\n##### Reference images:"
+                picture_block = "##### Reference images:"
                 for picture_path in picture_paths:
-                    response_with_source_and_picture_paths += f"\n- [{picture_path.split('/')[-1]}]({picture_path})"
-            
+                    picture_block += f"\n- [{picture_path.split('/')[-1]}]({picture_path})"
+                citation_blocks.append(picture_block)
+            citations = "\n\n".join(citation_blocks)
+
             # Format final response
             result = {
-                "response": response_with_source_and_picture_paths,
+                "response": "\n\n".join(part for part in (answer, citations) if part),
+                "answer": answer,
+                "citations": citations,
                 "sources": sources,
                 "confidence": confidence
             }

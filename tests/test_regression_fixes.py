@@ -341,31 +341,78 @@ def test_failed_turns_restore_completed_state_and_bound_checkpoints(client, monk
     assert [message.content for message in result["messages"]] == ["successful question", "answer", "recovered question", "answer"]
 
 
-@pytest.mark.parametrize("image_text", ["yes please analyze this scan", "no previous scan available"])
-def test_image_text_is_not_interpreted_as_a_review_decision(image_text):
+def _output_guardrail_node(check_output, *, fail_open=False):
     # Exercise the real nested output node without initializing remote models.
     import ast
     from pathlib import Path
     from types import SimpleNamespace
+    from agents.review_policy import IMAGE_AGENTS
     tree = ast.parse(Path(decision.__file__).read_text(encoding="utf-8"))
     node = next(node for node in ast.walk(tree)
                 if isinstance(node, ast.FunctionDef) and node.name == "apply_output_guardrails")
+    namespace = {"AgentState": dict, "AIMessage": AIMessage, "IMAGE_AGENTS": IMAGE_AGENTS,
+                 "guardrails": SimpleNamespace(check_output_safely=check_output),
+                 "config": SimpleNamespace(guardrails=SimpleNamespace(output_fail_open=fail_open, output_model_name="fake"))}
+    exec(compile(ast.Module(body=[node], type_ignores=[]), decision.__file__, "exec"), namespace)
+    return namespace["apply_output_guardrails"]
+
+
+@pytest.mark.parametrize("image_text", ["yes please analyze this scan", "no previous scan available"])
+def test_image_text_is_not_interpreted_as_a_review_decision(image_text):
     calls = []
 
     def check_output(*args, **kwargs):
         calls.append(args)
         return "checked image analysis", "completed"
 
-    namespace = {"AgentState": dict, "AIMessage": AIMessage,
-                 "guardrails": SimpleNamespace(check_output_safely=check_output),
-                 "config": SimpleNamespace(guardrails=SimpleNamespace(output_fail_open=False, output_model_name="fake"))}
-    exec(compile(ast.Module(body=[node], type_ignores=[]), decision.__file__, "exec"), namespace)
-    result = namespace["apply_output_guardrails"]({
+    result = _output_guardrail_node(check_output)({
         "output": AIMessage(content="image analysis\nHuman Validation Required"),
         "current_input": {"text": image_text}, "messages": [],
     })
     assert len(calls) == 1
     assert result["messages"].content == "checked image analysis"
+
+
+CITATIONS = "##### Source documents:\n- [study.pdf](data/raw/study.pdf)"
+
+
+def test_citations_are_appended_after_output_review():
+    reviewed = []
+
+    def check_output(text, *_args, **_kwargs):
+        reviewed.append(text)
+        return "rewritten answer", "completed"
+
+    result = _output_guardrail_node(check_output)({
+        "output": AIMessage(content="model answer"), "output_appendix": CITATIONS,
+        "current_input": "brain tumor types", "messages": [],
+    })
+    assert reviewed == ["model answer"]
+    assert result["messages"].content == f"rewritten answer\n\n{CITATIONS}"
+
+
+def test_refused_answer_gets_no_citations():
+    from agents.guardrails.local_guardrails import SAFE_OUTPUT_FALLBACK
+
+    result = _output_guardrail_node(lambda *_args, **_kwargs: (SAFE_OUTPUT_FALLBACK, "timeout"))({
+        "output": AIMessage(content="model answer"), "output_appendix": CITATIONS,
+        "current_input": "brain tumor types", "messages": [],
+    })
+    assert result["messages"].content == SAFE_OUTPUT_FALLBACK
+
+
+def test_image_template_is_shown_without_rewriting():
+    calls = []
+    template = "本地胸片分类模型的结果：**COVID-19 阳性**。\n\n**需要人工复核：**请复核。"
+
+    result = _output_guardrail_node(lambda *args, **_kwargs: calls.append(args))({
+        "output": AIMessage(content=template), "selected_agent": "CHEST_XRAY_AGENT",
+        "current_input": {"text": "请分析这张胸片"}, "messages": [],
+    })
+    assert calls == []
+    assert result["messages"].content == template
+    assert result["trace_metadata"]["guardrail_status"] == "skipped"
+    assert result["trace_metadata"]["guardrail_fallback"] is False
 
 
 def test_node_failure_on_first_turn_is_cleared_before_retry(client, monkeypatch):

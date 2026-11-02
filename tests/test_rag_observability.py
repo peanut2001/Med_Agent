@@ -114,6 +114,37 @@ def test_output_guardrail_model_error_fails_closed():
     assert status == "model_error"
 
 
+def test_rag_answer_and_citations_are_returned_separately():
+    from agents.rag_agent.response_generator import ResponseGenerator
+
+    model = SimpleNamespace(invoke=lambda _prompt: SimpleNamespace(content="Gliomas are common."))
+    generator = ResponseGenerator(SimpleNamespace(rag=SimpleNamespace(
+        response_generator_model=model, include_sources=True,
+    )))
+
+    result = generator.generate_response(
+        "brain tumor types",
+        [{"content": "text", "source": "study.pdf", "source_path": "data/raw/study.pdf", "score": 0.9}],
+        ["data/parsed_docs/figure.png"],
+    )
+
+    assert result["answer"] == "Gliomas are common."
+    assert result["citations"] == (
+        "##### Source documents:\n- [study.pdf](data/raw/study.pdf)\n\n"
+        "##### Reference images:\n- [figure.png](data/parsed_docs/figure.png)"
+    )
+    assert result["response"] == f"{result['answer']}\n\n{result['citations']}"
+
+
+def test_legacy_source_links_become_same_origin_paths(monkeypatch):
+    monkeypatch.delenv("PUBLIC_BASE_URL", raising=False)
+    convert = vectorstore_qdrant._current_source_url
+
+    # The exact form every link in the existing knowledge base was stored in.
+    assert convert("http://localhost:8000/./data/raw/brain_tumors_ucni.pdf") == "/data/raw/brain_tumors_ucni.pdf"
+    assert convert("/data/raw/study.pdf") == "/data/raw/study.pdf"
+
+
 def test_vectorstore_and_docstore_are_loaded_once(monkeypatch):
     calls = {"collection": 0, "sparse": 0, "vectorstore": 0, "docstore": 0}
     store = vectorstore_qdrant.VectorStore.__new__(vectorstore_qdrant.VectorStore)

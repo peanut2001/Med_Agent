@@ -102,15 +102,20 @@ class WebSearchProcessor:
         if not output_text.strip():
             raise RuntimeError("Web search response did not contain output text")
 
+        # Built from the search tool's own results, not written by the model,
+        # and returned on their own so the output reviewer cannot drop them.
         sources = self._extract_sources(response)
+        citations = ""
         if sources:
-            output_text += "\n\n##### 联网来源："
+            citations = "##### 联网来源："
             for source in sources[:8]:
                 safe_title = source["title"].replace("[", "").replace("]", "")
-                output_text += f"\n- [{safe_title}]({source['url']})"
+                citations += f"\n- [{safe_title}]({source['url']})"
 
         return {
-            "message": AIMessage(content=output_text),
+            "message": AIMessage(content="\n\n".join(part for part in (output_text, citations) if part)),
+            "answer": output_text,
+            "citations": citations,
             "source_count": len(sources),
             "model": getattr(response, "model", self.model_name),
         }

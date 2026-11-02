@@ -31,6 +31,19 @@ def _source_url(document_path: str) -> str:
     return f"{prefix}/{relative}"
 
 
+# Ingests before 2026-09-21 stored absolute links that assumed the app always
+# ran as one process on localhost:8000. That is wrong under any other host or
+# port (the Docker dev setup serves the page from 5175).
+_LEGACY_SOURCE_PREFIX = "http://localhost:8000/"
+
+
+def _current_source_url(stored: str) -> str:
+    """Rewrite a link stored by an older ingest into the current format."""
+    if stored and stored.startswith(_LEGACY_SOURCE_PREFIX):
+        return _source_url(stored[len(_LEGACY_SOURCE_PREFIX):])
+    return stored
+
+
 class VectorStore:
     """
     Create vector store, ingest documents, retrieve relevant documents
@@ -231,7 +244,7 @@ class VectorStore:
                 "content": formatted_doc,
                 "score": score,  # Use the actual similarity score
                 "source": chunk.metadata['source'],
-                "source_path": chunk.metadata['source_path'],
+                "source_path": _current_source_url(chunk.metadata['source_path']),
             }
             retrieved_docs.append(doc_dict)
             

@@ -49,6 +49,9 @@ def test_gpt_56_sol_uses_responses_web_search_and_returns_sources():
 
     assert isinstance(result["message"], AIMessage)
     assert "https://www.who.int/example" in result["message"].content
+    # Returned apart from the answer so the output reviewer cannot drop them.
+    assert result["answer"] == FakeResponse.output_text
+    assert "https://www.who.int/example" in result["citations"]
     assert result["source_count"] == 1
     assert responses.kwargs["model"] == "gpt-5.6-sol"
     assert responses.kwargs["tools"] == [{"type": "web_search"}]

@@ -29,7 +29,7 @@ from agents.artifacts import produce_private_artifact
 from agents.concurrency import run_agent_request
 from agents.execution_trace import execution_trace_store, trace_context, traced_node
 from agents.validation_store import validation_store
-from agents.review_policy import assess_review_need
+from agents.review_policy import IMAGE_AGENTS, assess_review_need
 
 import cv2
 import numpy as np
@@ -130,6 +130,7 @@ class AgentState(MessagesState):
     has_image: bool  # Whether the current input contains an image
     image_type: Optional[str]  # Type of medical image if present
     output: Optional[str]  # Final output to user
+    output_appendix: Optional[str]  # System-built citations, appended after output review
     needs_human_validation: bool  # Whether human validation is required
     validation_id: Optional[str]
     result_image_path: Optional[str]
@@ -544,9 +545,10 @@ def _create_agent_graph_unlocked():
         print(f"Retrieval Confidence: {retrieval_confidence}")
         print(f"Sources: {len(response['sources'])}")
 
-        # Check if response indicates insufficient information
+        # Check if response indicates insufficient information. Only the
+        # model's answer is used; its citations are appended after review.
         insufficient_info = False
-        response_content = response["response"]
+        response_content = response.get("answer", response["response"])
         
         # Extract the content properly based on type
         if isinstance(response_content, dict) and hasattr(response_content, 'content'):
@@ -579,12 +581,15 @@ def _create_agent_graph_unlocked():
         if retrieval_confidence >= config.rag.min_retrieval_confidence:
             # response_output = response["response"]
             response_output = AIMessage(content=response_text)
+            output_appendix = response.get("citations") or None
         else:
             response_output = AIMessage(content="")
-        
+            output_appendix = None
+
         return {
             **state,
             "output": response_output,
+            "output_appendix": output_appendix,
             "needs_human_validation": False,  # Assuming no validation needed for RAG responses
             "retrieval_confidence": retrieval_confidence,
             "agent_name": "RAG_AGENT",
@@ -627,7 +632,8 @@ def _create_agent_graph_unlocked():
             web_result = web_search_processor.process_web_search_results(
                 query=state["current_input"], chat_history=recent_context
             )
-            processed_response = web_result["message"]
+            processed_response = AIMessage(content=web_result["answer"])
+            output_appendix = web_result.get("citations") or None
             web_search_metadata.update({
                 "web_search_model": web_result.get("model", config.web_search.model_name),
                 "web_source_count": web_result.get("source_count", 0),
@@ -650,6 +656,7 @@ def _create_agent_graph_unlocked():
                     "如问题涉及症状、诊断或治疗，请咨询持证医疗专业人员。"
                 )
             processed_response = AIMessage(content=fallback_text)
+            output_appendix = None
             web_search_metadata.update({
                 "web_search_fallback": True,
                 "web_search_error_type": type(exc).__name__,
@@ -667,6 +674,7 @@ def _create_agent_graph_unlocked():
             **state,
             # "output": "This would be handled by the web search agent, finding the latest information.",
             "output": processed_response,
+            "output_appendix": output_appendix,
             "agent_name": involved_agents,
             "selected_agent": "WEB_SEARCH_PROCESSOR_AGENT",
             "trace_metadata": web_search_metadata,
@@ -693,8 +701,8 @@ def _create_agent_graph_unlocked():
 
         response = AIMessage(
             content=(
-                "Brain MRI analysis is not currently available in this deployment. "
-                "Please do not use this response as a diagnosis; consult a healthcare professional."
+                "脑部 MRI 分析在当前部署中暂不可用。"
+                "请勿将此回复视为诊断结论，如有需要请咨询专业医生。"
             )
         )
 
@@ -721,12 +729,18 @@ def _create_agent_graph_unlocked():
         except ImageModelUnavailableError:
             return _image_model_unavailable_state(state, "CHEST_XRAY_AGENT", "胸片")
 
+        # Shown verbatim (image templates skip the output reviewer), so the
+        # disclaimer has to be part of the template itself.
+        disclaimer = (
+            "该结果仅为 AI 辅助判断，不能作为诊断依据，需由医疗专业人员复核；"
+            "确诊还需结合症状、病史和病原学检测。"
+        )
         if predicted_class == "covid19":
-            response = AIMessage(content="The analysis of the uploaded chest X-ray image indicates a **POSITIVE** result for **COVID-19**.")
+            response = AIMessage(content=f"本地胸片分类模型的结果：**COVID-19 阳性**。\n\n{disclaimer}")
         elif predicted_class == "normal":
-            response = AIMessage(content="The analysis of the uploaded chest X-ray image indicates a **NEGATIVE** result for **COVID-19**, i.e., **NORMAL**.")
+            response = AIMessage(content=f"本地胸片分类模型的结果：**COVID-19 阴性**（正常）。\n\n{disclaimer}")
         else:
-            response = AIMessage(content="The uploaded image is not clear enough to make a diagnosis / the image is not a medical image.")
+            response = AIMessage(content="上传的图像不够清晰或不是医学影像，无法给出分析结果。")
 
         # response = AIMessage(content="This would be handled by the chest X-ray agent, analyzing the image.")
 
@@ -759,9 +773,12 @@ def _create_agent_graph_unlocked():
         predicted_mask = output_path is not None
 
         if predicted_mask:
-            response = AIMessage(content="Following is the analyzed **segmented** output of the uploaded skin lesion image:")
+            response = AIMessage(content=(
+                "以下是上传皮肤病变图像的**病灶分割**结果。\n\n"
+                "分割只标出病灶范围，不代表良恶性判断；该结果仅为 AI 辅助参考，需由皮肤科医生复核。"
+            ))
         else:
-            response = AIMessage(content="The uploaded image is not clear enough to make a diagnosis / the image is not a medical image.")
+            response = AIMessage(content="上传的图像不够清晰或不是医学影像，无法给出分析结果。")
 
         # response = AIMessage(content="This would be handled by the skin lesion agent, analyzing the skin image.")
 
@@ -802,7 +819,7 @@ def _create_agent_graph_unlocked():
         print(f"Selected agent: HUMAN_VALIDATION")
 
         # Append validation request to the existing output
-        validation_prompt = f"{state['output'].content}\n\n**Human Validation Required:**\n- If you're a healthcare professional: Please validate the output. Select **Yes** or **No**. If No, provide comments.\n- If you're a patient: Simply click Yes to confirm."
+        validation_prompt = f"{state['output'].content}\n\n**需要人工复核：**请由医疗专业人员在下方确认或驳回此结果，驳回时可填写复核意见。"
 
         # Create an AI message with the validation prompt
         validation_message = AIMessage(content=validation_prompt)
@@ -846,14 +863,28 @@ def _create_agent_graph_unlocked():
         elif isinstance(current_input, dict):
             input_text = current_input.get("text", "")
         
-        # Apply output sanitization
-        sanitized_output, guardrail_status = guardrails.check_output_safely(
-            output_text, input_text, fail_open=config.guardrails.output_fail_open
-        )
+        # Image agents answer with fixed templates around a local model's label,
+        # not with model-written text. The reviewer rewrote those templates and
+        # dropped both the label and the review request, so they are shown
+        # verbatim; the templates carry their own disclaimers.
+        if state.get("selected_agent") in IMAGE_AGENTS:
+            sanitized_output, guardrail_status = output_text, "skipped"
+        else:
+            sanitized_output, guardrail_status = guardrails.check_output_safely(
+                output_text, input_text, fail_open=config.guardrails.output_fail_open
+            )
+
+        # Citations are built by the system, not the model, and the reviewer
+        # dropped them while rewriting, so they are appended after review. A
+        # refused answer (failed closed) gets none.
+        appendix = state.get("output_appendix")
+        if appendix and (guardrail_status == "completed" or config.guardrails.output_fail_open):
+            sanitized_output = "\n\n".join(part for part in (sanitized_output, appendix) if part)
+
         guardrail_metadata = {
             "guardrail_status": guardrail_status,
             "guardrail_model": config.guardrails.output_model_name,
-            "guardrail_fallback": guardrail_status != "completed",
+            "guardrail_fallback": guardrail_status not in ("completed", "skipped"),
         }
         # sanitized_output = output_text
         
@@ -957,6 +988,7 @@ def init_agent_state() -> AgentState:
         "has_image": False,
         "image_type": None,
         "output": None,
+        "output_appendix": None,
         "needs_human_validation": False,
         "validation_id": None,
         "result_image_path": None,

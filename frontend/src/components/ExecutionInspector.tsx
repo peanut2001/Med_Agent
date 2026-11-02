@@ -50,6 +50,7 @@ function nodeDetail(node: TraceNode) {
     return metadata.expansion_skipped ? "已跳过 LLM 查询扩展" : "已执行 LLM 查询扩展";
   }
   if (typeof metadata.guardrail_status === "string") {
+    if (metadata.guardrail_status === "skipped") return "固定模板输出，未经模型审核";
     return metadata.guardrail_fallback ? `安全降级：${metadata.guardrail_status}` : "医疗安全检查通过";
   }
   if (typeof metadata.web_search_provider === "string") {
