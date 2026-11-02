@@ -46,6 +46,27 @@ class Reranker:
             directory = directory[2:]
         return f"{self.public_base_url}/{directory}/{filename}"
 
+    def _picture_references(self, documents: List[Dict[str, Any]], parsed_content_dir: str) -> List[str]:
+        """Turn the ``picture_counter_<n>`` markers in documents into image URLs."""
+        picture_reference_paths = []
+        for doc in documents:
+            # A document without a "source" cannot be turned into an image
+            # path; skip it instead of raising, which previously aborted the
+            # whole rerank and silently fell back to the original ordering.
+            source = doc.get("source")
+            if not source:
+                continue
+            doc_basename = os.path.splitext(str(source))[0]  # Remove file extension
+            for match in re.finditer(r"picture_counter_(\d+)", doc.get("content", "")):
+                counter_value = int(match.group(1))
+                picture_reference_paths.append(
+                    self._picture_url(
+                        parsed_content_dir,
+                        f"{doc_basename}-picture-{counter_value}.png",
+                    )
+                )
+        return picture_reference_paths
+
     def _score(self, query: str, texts: List[str]) -> List[float]:
         """
         Call the remote rerank endpoint and return one score per input text,
@@ -141,29 +162,16 @@ class Reranker:
             if self.top_k and len(reranked_docs) > self.top_k:
                 reranked_docs = reranked_docs[:self.top_k]
 
-            # Extract picture references
-            picture_reference_paths = []
-            for doc in reranked_docs:
-                # A document without a "source" cannot be turned into an image
-                # path; skip it instead of raising, which previously aborted the
-                # whole rerank and silently fell back to the original ordering.
-                source = doc.get("source")
-                if not source:
-                    continue
-                doc_basename = os.path.splitext(str(source))[0]  # Remove file extension
-                for match in re.finditer(r"picture_counter_(\d+)", doc["content"]):
-                    counter_value = int(match.group(1))
-                    picture_reference_paths.append(
-                        self._picture_url(
-                            parsed_content_dir,
-                            f"{doc_basename}-picture-{counter_value}.png",
-                        )
-                    )
-
-            return reranked_docs, picture_reference_paths
+            return reranked_docs, self._picture_references(reranked_docs, parsed_content_dir)
 
         except Exception as e:
             self.logger.error(f"Error during reranking: {e}")
-            # Fallback to original ranking if reranking fails
+            # Keep the retriever's own relevance order, but still cap it at
+            # top_k and still extract figures. Returning every candidate put
+            # unrelated documents into the cited sources, and returning no
+            # pictures meant answers never showed reference images.
             self.logger.warning("Falling back to original ranking")
-            return documents, []
+            fallback = documents[:self.top_k] if self.top_k else documents
+            if not fallback or not isinstance(fallback[0], dict):
+                return fallback, []
+            return fallback, self._picture_references(fallback, parsed_content_dir)

@@ -136,6 +136,32 @@ def test_rag_answer_and_citations_are_returned_separately():
     assert result["response"] == f"{result['answer']}\n\n{result['citations']}"
 
 
+def test_rerank_failure_keeps_top_k_and_reference_images():
+    from agents.rag_agent.reranker import Reranker
+
+    reranker = Reranker(SimpleNamespace(rag=SimpleNamespace(
+        reranker_model="reranker", reranker_api_base="http://reranker.invalid/v1",
+        reranker_api_key="key", reranker_timeout=1, reranker_top_k=3,
+        reranker_max_doc_chars=4000, public_base_url="",
+    )))
+
+    def unavailable(*_args):
+        raise RuntimeError("503 model_not_found")
+
+    reranker._score = unavailable
+    documents = [
+        {"content": f"chunk picture_counter_{i}", "source": f"doc{i}.pdf", "score": 1 - i / 10}
+        for i in range(5)
+    ]
+
+    reranked, pictures = reranker.rerank("brain tumor types", documents, "./data/parsed_docs")
+
+    # Retriever order is kept, capped at top_k, and reported as not reranked.
+    assert [doc["source"] for doc in reranked] == ["doc0.pdf", "doc1.pdf", "doc2.pdf"]
+    assert not any("rerank_score" in doc for doc in reranked)
+    assert pictures == [f"/data/parsed_docs/doc{i}-picture-{i}.png" for i in range(3)]
+
+
 def test_legacy_source_links_become_same_origin_paths(monkeypatch):
     monkeypatch.delenv("PUBLIC_BASE_URL", raising=False)
     convert = vectorstore_qdrant._current_source_url
